@@ -1,0 +1,17 @@
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\bin\Debug\Jeux_Multiples.exe.config
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\bin\Debug\Jeux_Multiples.exe
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\bin\Debug\Jeux_Multiples.pdb
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\obj\Debug\Jeux_Multiples.csproj.AssemblyReference.cache
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\obj\Debug\Jeux_Multiples.Accueil.resources
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\obj\Debug\Jeux_Multiples.BJCarte.resources
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\obj\Debug\Jeux_Multiples.PanelDouble.resources
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\obj\Debug\Jeux_Multiples.LobbyForm.resources
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\obj\Debug\Jeux_Multiples.THCarte.resources
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\obj\Debug\Jeux_Multiples.Puissance_4.resources
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\obj\Debug\Jeux_Multiples.mort_Pion.resources
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\obj\Debug\Jeux_Multiples.Properties.Resources.resources
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\obj\Debug\Jeux_Multiples.Snake.resources
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\obj\Debug\Jeux_Multiples.csproj.GenerateResource.cache
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\obj\Debug\Jeux_Multiples.csproj.CoreCompileInputs.cache
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\obj\Debug\Jeux_Multiples.exe
+o:\Joutes2024\Paul\Jeux\Jeux_Multiples\Jeux_Multiples\obj\Debug\Jeux_Multiples.pdb
