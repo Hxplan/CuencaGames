@@ -84,6 +84,7 @@
       <DependentUpon>Poker.cs</DependentUpon>
     </Compile>
     <Compile Include="NetworkManager.cs" />
+    <Compile Include="LobbyClient.cs" />
     <Compile Include="puissance_4.cs">
       <SubType>Form</SubType>
     </Compile>

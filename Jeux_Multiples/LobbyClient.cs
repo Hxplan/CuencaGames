@@ -12,14 +12,15 @@ namespace Jeux_Multiples
         public int id { get; set; }
         public string server_name { get; set; }
         public string ip_address { get; set; }
+        public string local_ip { get; set; }
         public int port { get; set; }
         public string created_at { get; set; }
     }
 
     public class LobbyClient
     {
-        // ⚠️ REMPLACER PAR VOTRE URL HOSTINGER
-        private const string API_URL = "http://YOUR_HOSTINGER_DOMAIN/lobby_api.php";
+        // URL publique de l'API Lobby (mettre à jour si changé)
+        private const string API_URL = "https://cuencamathieu.com/lobby_api.php";
         
         private static readonly HttpClient client = new HttpClient();
         private static readonly JavaScriptSerializer serializer = new JavaScriptSerializer();
@@ -36,11 +37,11 @@ namespace Jeux_Multiples
             }
         }
 
-        public async Task<int?> RegisterServer(string name, string ip, int port)
+        public async Task<int?> RegisterServer(string name, string publicIp, string localIp, int port)
         {
             try
             {
-                var data = new { name = name, ip = ip, port = port };
+            var data = new { name = name, ip = publicIp, local_ip = localIp, port = port };
                 var json = serializer.Serialize(data);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
 

@@ -1,6 +1,8 @@
 using System;
 using System.Drawing;
 using System.Windows.Forms;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace Jeux_Multiples
 {
@@ -14,6 +16,7 @@ namespace Jeux_Multiples
 
         private ListBox lstServers;
         private Button btnRefresh;
+        private string myPublicIp = null;
 
         public WaitingForm()
         {
@@ -87,6 +90,26 @@ namespace Jeux_Multiples
             btnDirect.Click += BtnDirect_Click;
             this.Controls.Add(btnDirect);
 
+            Button btnCreate = new Button();
+            btnCreate.Text = "CRÉER SALON";
+            btnCreate.Size = new Size(120, 40);
+            btnCreate.Location = new Point(190, 350);
+            btnCreate.FlatStyle = FlatStyle.Flat;
+            btnCreate.ForeColor = Color.Lime;
+            btnCreate.Click += async (s, e) =>
+            {
+                string name = Microsoft.VisualBasic.Interaction.InputBox("Nom du salon (pseudo affiché) :", "Créer Salon", NetworkManager.Instance.MyPseudo);
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    lblStatus.Text = "HÉBERGEMENT SALON...";
+                    NetworkManager.Instance.HostSalon(name);
+                    btnCreate.Enabled = false;
+                    await Task.Delay(200); // small UI breath
+                    await RefreshServerList();
+                }
+            };
+            this.Controls.Add(btnCreate);
+
             // Paint border
             this.Paint += (s, e) => ControlPaint.DrawBorder(e.Graphics, this.ClientRectangle, Color.Cyan, ButtonBorderStyle.Solid);
 
@@ -107,7 +130,6 @@ namespace Jeux_Multiples
 
         private async void WaitingForm_Load(object sender, EventArgs e)
         {
-            NetworkManager.Instance.StartMatchmaking();
             NetworkManager.Instance.OnConnected += HandleConnected;
             await RefreshServerList();
         }
@@ -117,30 +139,32 @@ namespace Jeux_Multiples
             lstServers.Items.Clear();
             lstServers.Items.Add("Chargement...");
             
+            myPublicIp = await NetworkManager.Instance.Lobby.GetPublicIP();
             var servers = await NetworkManager.Instance.Lobby.GetServers();
-            
+
             lstServers.Items.Clear();
-            if (servers.Count == 0)
+            bool any = false;
+            foreach (var server in servers)
             {
-                lstServers.Items.Add("Aucun serveur trouvé.");
+                // Skip salons created with the same pseudo as current user
+                if (!string.IsNullOrEmpty(NetworkManager.Instance.MyPseudo) && server.server_name == NetworkManager.Instance.MyPseudo) continue;
+                lstServers.Items.Add(new ServerListItem(server));
+                any = true;
             }
-            else
-            {
-                foreach (var server in servers)
-                {
-                    // Format: "Nom du serveur (IP:Port)"
-                    // On stocke l'objet ServerInfo dans le Tag ? Non ListBox simple
-                    // On utilise une classe wrapper ou juste string parsing
-                    lstServers.Items.Add(new ServerListItem(server));
-                }
-            }
+            if (!any) lstServers.Items.Add("Aucun serveur trouvé.");
         }
 
         private void LstServers_DoubleClick(object sender, EventArgs e)
         {
             if (lstServers.SelectedItem is ServerListItem item)
             {
-                string address = $"{item.Info.ip_address}:{item.Info.port}";
+                string dest = item.Info.ip_address;
+                // If the host reports the same public IP as us and provided a local_ip, try local IP first
+                if (!string.IsNullOrEmpty(myPublicIp) && item.Info.ip_address == myPublicIp && !string.IsNullOrEmpty(item.Info.local_ip))
+                {
+                    dest = item.Info.local_ip;
+                }
+                string address = $"{dest}:{item.Info.port}";
                 lblStatus.Text = "CONNEXION LOBBY...";
                 NetworkManager.Instance.ConnectDirectly(address);
             }
@@ -176,7 +200,7 @@ namespace Jeux_Multiples
 
         private void BtnDirect_Click(object sender, EventArgs e)
         {
-            string ip = Microsoft.VisualBasic.Interaction.InputBox("Entrez l'IP ou l'Adresse du Tunnel (ex: 0.tcp.ngrok.io:12345) :", "Connexion Directe", "192.168.1.");
+            string ip = Microsoft.VisualBasic.Interaction.InputBox("Entrez l'IP:PORT (ex: 192.168.1.5:8080) :", "Connexion Directe", "192.168.1.");
             if (!string.IsNullOrWhiteSpace(ip))
             {
                 lblStatus.Text = "CONNEXION À " + ip + "...";

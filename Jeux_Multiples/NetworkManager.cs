@@ -97,11 +97,8 @@ namespace Jeux_Multiples
         {
             try
             {
-                // Commande pour autoriser l'application dans le pare-feu
                 string exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
                 string ruleName = "Jeux_Multiples_LAN";
-                
-                // Nettoyage ancienne règle (silencieux)
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = "netsh",
@@ -111,7 +108,6 @@ namespace Jeux_Multiples
                     Verb = "runas"
                 });
 
-                // Ajout nouvelle règle (TCP) - GLOBAL ACCESS
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = "netsh",
@@ -121,7 +117,6 @@ namespace Jeux_Multiples
                     Verb = "runas"
                 });
 
-                // Ajout nouvelle règle (UDP) - GLOBAL ACCESS
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = "netsh",
@@ -197,7 +192,6 @@ namespace Jeux_Multiples
         {
             Log("🚀 Scanning 10.138.8.x et 10.138.9.x...");
             
-            // On cible spécifiquement les sous-réseaux mentionnés par l'utilisateur
             List<string> subnets = new List<string>();
             string[] parts = MyIP.Split('.');
             if (parts.Length == 4)
@@ -297,8 +291,6 @@ namespace Jeux_Multiples
         // Ancienne méthode pour UDP Role Resolution (Obsolète mais gardée pour compatibilité logique)
         private void StartHostTimeout()
         {
-            // Ne fait plus rien de spécial car le serveur est déjà lancé
-            // Sert juste à set IsHost = true avant la connexion si on veut forcer
             if (IsHost) return;
             IsHost = true;
             Log("Rôle défini : HOST (via UDP GUID)");
@@ -333,7 +325,7 @@ namespace Jeux_Multiples
              catch (Exception ex)
              {
                  Log("Echec connexion TCP : " + ex.Message);
-                 System.Windows.Forms.MessageBox.Show($"Impossible de rejoindre {address}.\nErreur : {ex.Message}\n\nSi vous utilisez un Tunnel (Ngrok/Cloudflare), vérifiez bien le PORT.", "Erreur Connexion", System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Error);
+                 System.Windows.Forms.MessageBox.Show($"Impossible de rejoindre {address}.\nErreur : {ex.Message}\n\nVérifiez le PORT et la reachabilité de l'adresse.", "Erreur Connexion", System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Error);
              }
         }
 
@@ -438,97 +430,19 @@ namespace Jeux_Multiples
             catch { return "127.0.0.1"; }
         }
 
-        // ════════════════════════════════════════════════════════════
-        //  NGROK AUTOMATION
-        // ════════════════════════════════════════════════════════════
-        public string NgrokUrl { get; private set; } = null;
-        private System.Diagnostics.Process ngrokProcess;
-
-        public async Task StartNgrok()
+        // Public helper to host a salon with a given name (sets pseudo and starts listening + registers to web lobby)
+        public void HostSalon(string salonName)
         {
-            try
-            {
-                string ngrokPath = "ngrok.exe";
-                
-                // 1. Download if missing
-                if (!System.IO.File.Exists(ngrokPath))
-                {
-                    Log("⬇️ Téléchargement de Ngrok...");
-                    using (WebClient client = new WebClient())
-                    {
-                        string zipPath = "ngrok.zip";
-                        string url = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip";
-                        await client.DownloadFileTaskAsync(new Uri(url), zipPath);
-                        System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, ".");
-                        System.IO.File.Delete(zipPath);
-                    }
-                }
+            if (running) Disconnect();
+            running = true;
+            IsConnected = false;
+            MyPseudo = salonName;
+            cts = new CancellationTokenSource();
 
-                // 2. Start Process
-                Log("🚀 Lancement du Tunnel Ngrok...");
-                
-                // Kill old processes
-                foreach(var p in System.Diagnostics.Process.GetProcessesByName("ngrok")) p.Kill();
-
-                System.Diagnostics.ProcessStartInfo psi = new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = ngrokPath,
-                    Arguments = $"tcp {PORT_TCP}", // ngrok tcp 8080
-                    WindowStyle = System.Diagnostics.ProcessWindowStyle.Minimized,
-                    CreateNoWindow = true // Hide loop
-                };
-                
-                ngrokProcess = System.Diagnostics.Process.Start(psi);
-                
-                // 3. Wait & Fetch URL
-                await Task.Delay(3000); // Wait for tunnel init
-                
-                using (WebClient client = new WebClient())
-                {
-                    // API Local Ngrok
-                    string json = await client.DownloadStringTaskAsync("http://127.0.0.1:4040/api/tunnels");
-                    
-                    // Simple parsing (avoid Newtonsoft dependency)
-                    // Looking for "public_url":"tcp://..."
-                    int idx = json.IndexOf("\"public_url\":\"");
-                    if (idx != -1)
-                    {
-                        int start = idx + 14;
-                        int end = json.IndexOf("\"", start);
-                        string url = json.Substring(start, end - start);
-                        
-                        // Strip tcp://
-                        NgrokUrl = url.Replace("tcp://", "");
-                        Log($"🌍 TUNNEL ACTIF: {NgrokUrl}");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log("⚠️ Erreur Ngrok: " + ex.Message);
-                if (ex.Message.Contains("402") || ex.Message.Contains("auth"))
-                {
-                    // Ask for token if failed
-                    string token = Microsoft.VisualBasic.Interaction.InputBox("Ngrok a besoin d'un Token (Compte Gratuit).\nCopiez-le depuis dashboard.ngrok.com :", "Auth Ngrok", "");
-                    if (!string.IsNullOrWhiteSpace(token))
-                    {
-                         System.Diagnostics.Process.Start("ngrok.exe", $"config add-authtoken {token}").WaitForExit();
-                         await StartNgrok(); // Retry
-                    }
-                }
-            }
+            // Start listening (this will call RegisterToWebLobby internally)
+            StartListening();
         }
 
-        public void StopNgrok()
-        {
-            try
-            {
-                if (ngrokProcess != null && !ngrokProcess.HasExited)
-                    ngrokProcess.Kill();
-            }
-            catch {}
-        }
-        
         // ════════════════════════════════════════════════════════════
         //  WEB LOBBY (Hostinger)
         // ════════════════════════════════════════════════════════════
@@ -549,7 +463,7 @@ namespace Jeux_Multiples
 
             Log($"Mon IP Publique : {publicIp}");
             
-            int? id = await Lobby.RegisterServer(MyPseudo, publicIp, PORT_TCP);
+            int? id = await Lobby.RegisterServer(MyPseudo, publicIp, MyIP, PORT_TCP);
             
             if (id != null)
             {
@@ -575,8 +489,7 @@ namespace Jeux_Multiples
                 string publicIp = await Lobby.GetPublicIP();
                 if (!string.IsNullOrEmpty(publicIp))
                 {
-                    await Lobby.RegisterServer(MyPseudo, publicIp, PORT_TCP);
-                    // Log("Ping Lobby..."); // Spam
+                    await Lobby.RegisterServer(MyPseudo, publicIp, MyIP, PORT_TCP);
                 }
             }
         }
