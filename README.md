@@ -1,6 +1,6 @@
 # 🎮 CuencaGames
 
-**CuencaGames** est une application multi-jeux développée en **C#**. Elle regroupe une collection de jeux classiques allant des jeux de plateau aux jeux de cartes, en passant par l'arcade. Jouez en solo ou affrontez l'Intelligence Artificielle !
+**CuencaGames** est une application multi-jeux développée en **C#**. Elle regroupe une collection de jeux classiques allant des jeux de plateau aux jeux de cartes, en passant par l'arcade. Jouez en solo et Multijoueur ou affrontez l'Intelligence Artificielle !
 
 ## 🕹️ Liste des jeux disponibles
 
@@ -35,3 +35,4 @@ Voici les jeux inclus dans l'application et leur état actuel :
 1. Clonez ce dépôt :
    ```bash
    git clone [https://github.com/votre-nom-utilisateur/CuencaGames.git](https://github.com/votre-nom-utilisateur/CuencaGames.git)
+
