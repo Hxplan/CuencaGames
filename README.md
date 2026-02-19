@@ -35,8 +35,9 @@ Pour jouer directement sans avoir à compiler le code, vous pouvez télécharger
 
 1. Rendez-vous sur la page des téléchargements : [Releases CuencaGames](https://github.com/Hxplan/CuencaGames/releases/)
 2. Téléchargez la dernière version disponible.
-3. Extrayez les fichiers (si nécessaire) et lancez l'application pour commencer à jouer !
+3. Executez le .exe pour commencer à jouer !
 
 *(Pour les développeurs souhaitant modifier le code source :)*
 ```bash
 demandez moi sur discord : Hoplan_
+
