@@ -39,4 +39,4 @@ Pour jouer directement sans avoir à compiler le code, vous pouvez télécharger
 
 *(Pour les développeurs souhaitant modifier le code source :)*
 ```bash
-git clone [https://github.com/Hxplan/CuencaGames.git](https://github.com/Hxplan/CuencaGames.git)
+demandez moi sur discord : Hoplan_
