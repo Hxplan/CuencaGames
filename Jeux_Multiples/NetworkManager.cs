@@ -8,503 +8,424 @@ using System.Threading.Tasks;
 
 namespace Jeux_Multiples
 {
-    // ════════════════════════════════════════════════════════════════
-    //  STRUCTURE DES PAQUETS
-    // ════════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════
+    //  STRUCTURE DES PAQUETS  (Type|Sender|Content)
+    // ════════════════════════════════════════════════════════════
     public class Packet
     {
-        public string Type { get; set; }    // ex: "CHAT", "MOVE", "HELLO"
-        public string Sender { get; set; }  // Pseudo
-        public string Content { get; set; } //
+        public string Type    { get; set; }
+        public string Sender  { get; set; }
+        public string Content { get; set; }
 
         public Packet(string type, string sender, string content)
-        {
-            Type = type;
-            Sender = sender;
-            Content = content;
-        }
+        { Type = type; Sender = sender; Content = content; }
 
-        public override string ToString()
-        {
-            return $"{Type}|{Sender}|{Content}";
-        }
+        public override string ToString() => $"{Type}|{Sender}|{Content}";
 
         public static Packet FromString(string data)
         {
-            string[] parts = data.Split(new char[] { '|' }, 3);
-            if (parts.Length < 3) return null;
-            return new Packet(parts[0], parts[1], parts[2]);
+            string[] p = data.Split(new[] { '|' }, 3);
+            return p.Length < 3 ? null : new Packet(p[0], p[1], p[2]);
         }
     }
 
-    // ════════════════════════════════════════════════════════════════
-    //  MANAGER RÉSEAU (AUTO-MATCH)
-    // ════════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════
+    //  NETWORK MANAGER (Singleton)
+    // ════════════════════════════════════════════════════════════
     public class NetworkManager
     {
-        private static NetworkManager _instance;
-        public static NetworkManager Instance
+        // ── Singleton ────────────────────────────────────────────
+        private static readonly Lazy<NetworkManager> _lazy =
+            new Lazy<NetworkManager>(() => new NetworkManager());
+        public static NetworkManager Instance => _lazy.Value;
+
+        // ── Configuration ─────────────────────────────────────────
+        private const int    PORT_TCP      = 8080;
+        private const int    PORT_UDP      = 8081;
+        private const string DISCOVER_MSG  = "CUENCAGAMES_DISCOVER";
+        private const int    PING_INTERVAL = 30_000; // ms
+
+        // ── État public ───────────────────────────────────────────
+        public bool   IsHost           { get; private set; }
+        public bool   IsConnected      { get; private set; }
+        public string MyPseudo         { get; set; } = "Joueur";
+        public string CurrentGameType  { get; set; } = "any";
+        public string OpponentPseudo   { get; private set; } = "?";
+        public string MyLocalIP        { get; private set; }
+        public string MyPublicIP       { get; private set; }
+        /// <summary>Si true, à la fermeture du jeu on revient au lobby sans déconnecter.</summary>
+        public bool ReturnToLobby      { get; set; }
+
+        // ── Services ──────────────────────────────────────────────
+        public LobbyClient Lobby { get; } = new LobbyClient();
+
+        // ── Événements ───────────────────────────────────────────
+        public event Action<string>  OnLog;
+        public event Action<Packet>  OnPacketReceived;
+        public event Action          OnConnected;
+        public event Action          OnDisconnected;
+
+        // ── Sockets ───────────────────────────────────────────────
+        private TcpListener   _listener;
+        private TcpClient     _tcpClient;
+        private NetworkStream _stream;
+        private UdpClient     _udp;
+
+        // ── Threading ─────────────────────────────────────────────
+        private bool                   _running;
+        private bool                   _registeredOnWeb;
+        private string                 _myGuid = Guid.NewGuid().ToString();
+        private CancellationTokenSource _cts;
+
+        // ═════════════════════════════════════════════════════════
+        private NetworkManager()
         {
-            get
-            {
-                if (_instance == null) _instance = new NetworkManager();
-                return _instance;
-            }
+            MyLocalIP = GetLocalIP();
+            TryUnlockFirewall();
         }
 
-        // Configuration
-        private const int PORT_UDP = 8081; // Was 45000
-        private const int PORT_TCP = 8080; // Was 45001 - Using 8080 as "standard" port
-        private const string DISCOVER_MSG = "JEUX_MULTIPLES_AUTO";
+        // ─────────────────────────────────────────────────────────
+        private void Log(string msg) => OnLog?.Invoke(msg);
 
-        // État
-        public bool IsHost { get; private set; } = false;
-        public bool IsConnected { get; private set; } = false;
-        public string MyPseudo { get; set; } = "Joueur";
-        public string OpponentPseudo { get; private set; } = "En attente...";
-        public string MyIP { get; private set; }
-        private string _myGuid; // Unique ID for this instance
-
-        // Sockets
-        private UdpClient udpSock;
-        private TcpListener tcpListener;
-        private TcpClient tcpClient;
-        private NetworkStream listStream;
-
-        // Events
-        public event Action<string> OnLog;
-        public event Action<Packet> OnPacketReceived;
-        public event Action OnConnected; 
-        public event Action OnDisconnected;
-
-        // Threading
-        private bool running = false;
-        private CancellationTokenSource cts;
-
-        private NetworkManager() 
+        // ════════════════════════════════════════════════════════
+        //  HÉBERGEMENT D'UN SALON
+        // ════════════════════════════════════════════════════════
+        /// <summary>
+        /// Crée un salon visible sur le Web + LAN.
+        /// Appeler AVANT de démarrer le matchmaking.
+        /// </summary>
+        public void HostSalon(string salonName, string gameType = "any", int maxPlayers = 2)
         {
-            MyIP = GetLocalIP();
-            _myGuid = Guid.NewGuid().ToString();
-            UnlockFirewall();
+            if (_running) Disconnect();
+            _running      = true;
+            IsConnected   = false;
+            MyPseudo      = salonName;
+            CurrentGameType = gameType;
+            _cts          = new CancellationTokenSource();
+
+            Log($"🟢 Hébergement de '{salonName}' [{gameType}] …");
+            StartTcpListener();
         }
 
-        private void Log(string msg)
-        {
-            OnLog?.Invoke(msg);
-        }
-
-        private void UnlockFirewall()
-        {
-            try
-            {
-                string exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
-                string ruleName = "Jeux_Multiples_LAN";
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = "netsh",
-                    Arguments = $"advfirewall firewall delete rule name=\"{ruleName}\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    Verb = "runas"
-                });
-
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = "netsh",
-                    Arguments = $"advfirewall firewall add rule name=\"{ruleName}_TCP\" dir=in action=allow program=\"{exePath}\" enable=yes profile=any remoteip=any protocol=tcp localport={PORT_TCP}",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    Verb = "runas"
-                });
-
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = "netsh",
-                    Arguments = $"advfirewall firewall add rule name=\"{ruleName}_UDP\" dir=in action=allow program=\"{exePath}\" enable=yes profile=any remoteip=any protocol=udp localport={PORT_UDP}",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    Verb = "runas"
-                });
-            }
-            catch { /* Ignorer si pas admin */ }
-        }
-
-        // ════════════════════════════════════════════════════════════
-        //  AUTO-MATCHMAKING
-        // ════════════════════════════════════════════════════════════
+        // ════════════════════════════════════════════════════════
+        //  MATCHMAKING AUTO (LAN)
+        // ════════════════════════════════════════════════════════
         public void StartMatchmaking()
         {
-            if (running) Disconnect();
-            running = true;
+            if (_running) Disconnect();
+            _running    = true;
             IsConnected = false;
-            cts = new CancellationTokenSource();
+            _cts        = new CancellationTokenSource();
 
-            Log("🔍 Recherche d'adversaire...");
-
-            // 1. Démarrer Serveur TCP (Pour Tunnel/DirectIP)
-            StartListening();
-
-            // 2. Broadcast UDP (LAN)
-            _ = Task.Run(() => DiscoverLoop(cts.Token));
-
-            // 3. Scan TCP (LAN Routé)
-            _ = Task.Run(() => ScanSubnets(cts.Token));
+            Log("🔍 Recherche automatique sur le LAN …");
+            StartTcpListener();
+            _ = Task.Run(() => UdpDiscoveryLoop(_cts.Token));
         }
 
-        private void StartListening()
-        {
-            try
-            {
-                if (tcpListener == null)
-                {
-                    tcpListener = new TcpListener(IPAddress.Any, PORT_TCP);
-                    tcpListener.Start();
-                    Log("Serveur TCP démarré (Port " + PORT_TCP + ")");
-                    
-                    // Enregistrement Web Lobby
-                    RegisterToWebLobby();
-                    
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            while (running && !IsConnected)
-                            {
-                                 var client = await tcpListener.AcceptTcpClientAsync();
-                                 if (IsConnected) { client.Close(); return; }
-                                 
-                                 Log("Connexion entrante acceptée !");
-                                 IsHost = true; // Je suis le serveur
-                                 HandleConnection(client);
-                            }
-                        }
-                        catch { }
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                Log("Impossible de lier le port " + PORT_TCP + " (Déjà utilisé ?). Mode Client uniquement.");
-            }
-        }
-
-        private async Task ScanSubnets(CancellationToken token)
-        {
-            Log("🚀 Scanning 10.138.8.x et 10.138.9.x...");
-            
-            List<string> subnets = new List<string>();
-            string[] parts = MyIP.Split('.');
-            if (parts.Length == 4)
-            {
-                string prefix = $"{parts[0]}.{parts[1]}";
-                subnets.Add($"{prefix}.8");
-                subnets.Add($"{prefix}.9");
-                if (parts[2] != "8" && parts[2] != "9") subnets.Add($"{prefix}.{parts[2]}");
-            }
-
-            List<Task> scanTasks = new List<Task>();
-            foreach(var subnet in subnets)
-            {
-                for (int i = 1; i < 255; i++)
-                {
-                    if (IsConnected) break;
-                    string targetIP = $"{subnet}.{i}";
-                    if (targetIP == MyIP) continue;
-
-                    scanTasks.Add(CheckHostAsync(targetIP, token));
-                    if (scanTasks.Count % 50 == 0) await Task.Delay(50); 
-                }
-            }
-            await Task.WhenAll(scanTasks);
-            if (!IsConnected) Log("Fin du scan.");
-        }
-
-        private async Task CheckHostAsync(string ip, CancellationToken token)
-        {
-            if (IsConnected || token.IsCancellationRequested) return;
-            try
-            {
-                using (TcpClient tempClient = new TcpClient())
-                {
-                    var connectTask = tempClient.ConnectAsync(ip, PORT_TCP);
-                    var timeoutTask = Task.Delay(200);
-                    if (await Task.WhenAny(connectTask, timeoutTask) == connectTask)
-                    {
-                        if (tempClient.Connected)
-                        {
-                            Log($"🎯 HÔTE DÉTECTÉ: {ip}");
-                            ConnectDirectly(ip); 
-                        }
-                    }
-                }
-            }
-            catch { }
-        }
-
-        private async Task DiscoverLoop(CancellationToken token)
-        {
-            try
-            {
-                udpSock = new UdpClient();
-                udpSock.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-                udpSock.Client.Bind(new IPEndPoint(IPAddress.Any, PORT_UDP));
-                udpSock.EnableBroadcast = true;
-
-                _ = Task.Run(async () => 
-                {
-                    IPEndPoint broadcastEp = new IPEndPoint(IPAddress.Broadcast, PORT_UDP);
-                    while (!token.IsCancellationRequested && !IsConnected)
-                    {
-                        byte[] data = Encoding.UTF8.GetBytes($"{DISCOVER_MSG}|{MyPseudo}|{MyIP}|{_myGuid}");
-                        await udpSock.SendAsync(data, data.Length, broadcastEp);
-                        await Task.Delay(1000, token);
-                    }
-                }, token);
-
-                while (!token.IsCancellationRequested && !IsConnected)
-                {
-                    var result = await udpSock.ReceiveAsync();
-                    string msg = Encoding.UTF8.GetString(result.Buffer);
-                    if (msg.StartsWith(DISCOVER_MSG))
-                    {
-                        var parts = msg.Split('|');
-                        if (parts.Length < 4) continue;
-                        if (parts[3] == _myGuid) continue;
-
-                        Log($"Joueur trouvé : {parts[1]} ({parts[2]})");
-                        int comparison = String.Compare(_myGuid, parts[3]);
-                        if (comparison < 0)
-                        {
-                            Log("Je suis CLIENT (guid distant prioritaire).");
-                            ConnectDirectly(parts[2]);
-                            break;
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                if (!base.Equals(ex.ToString())) Log("Erreur Discovery: " + ex.Message);
-            }
-        }
-
-        // Ancienne méthode pour UDP Role Resolution (Obsolète mais gardée pour compatibilité logique)
-        private void StartHostTimeout()
-        {
-            if (IsHost) return;
-            IsHost = true;
-            Log("Rôle défini : HOST (via UDP GUID)");
-        }
-
+        // ════════════════════════════════════════════════════════
+        //  CONNEXION DIRECTE (IP ou IP:PORT)
+        // ════════════════════════════════════════════════════════
         public async void ConnectDirectly(string address)
         {
-             if (IsConnected) return;
+            if (IsConnected) return;
 
-             try
-             {
-                 string host = address;
-                 int port = PORT_TCP;
+            // Initialiser _cts si on rejoint directement sans passer par HostSalon/StartMatchmaking
+            if (_cts == null || _cts.IsCancellationRequested)
+            {
+                _cts     = new CancellationTokenSource();
+                _running = true;
+            }
 
-                 // Support syntaxe "IP:PORT" ou "Domaine:PORT"
-                 if (address.Contains(":"))
-                 {
-                     string[] parts = address.Split(':');
-                     if (parts.Length == 2 && int.TryParse(parts[1], out int p))
-                     {
-                         host = parts[0];
-                         port = p;
-                     }
-                 }
+            string host = address;
+            int    port = PORT_TCP;
 
-                  tcpClient = new TcpClient();
-                  await tcpClient.ConnectAsync(host, port);
-                  IsHost = false; // Je suis client car j'ai initié la connexion
-                  HandleConnection(tcpClient);
-                  Log($"Connecté direct à {host}:{port}");
-              }
-             catch (Exception ex)
-             {
-                 Log("Echec connexion TCP : " + ex.Message);
-                 System.Windows.Forms.MessageBox.Show($"Impossible de rejoindre {address}.\nErreur : {ex.Message}\n\nVérifiez le PORT et la reachabilité de l'adresse.", "Erreur Connexion", System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Error);
-             }
-        }
+            if (address.Contains(":"))
+            {
+                string[] parts = address.Split(':');
+                if (parts.Length == 2 && int.TryParse(parts[1], out int p))
+                { host = parts[0]; port = p; }
+            }
 
-        private void HandleConnection(TcpClient client)
-        {
-            if (IsConnected) return; // Déjà connecté race condition
-            
-            IsConnected = true;
-            tcpClient = client;
-            listStream = tcpClient.GetStream();
-            
-            Log("✅ CONNECTÉ !");
-            
-            // Send Handshake immediately
-            SendPacket(new Packet("HELLO", MyPseudo, "v1"));
-
-            OnConnected?.Invoke();
-            
-            // Start reading
-            _ = Task.Run(() => ReadLoop(cts.Token));
-        }
-
-        // ════════════════════════════════════════════════════════════
-        //  COMM & TOOLS
-        // ════════════════════════════════════════════════════════════
-        public void SendPacket(Packet p)
-        {
-            if (tcpClient == null || !tcpClient.Connected) return;
+            Log($"⏩ Connexion directe → {host}:{port} …");
             try
             {
-                string raw = p.ToString() + "\n";
-                byte[] data = Encoding.UTF8.GetBytes(raw);
-                listStream.Write(data, 0, data.Length);
+                var client = new TcpClient();
+                await client.ConnectAsync(host, port);
+                IsHost = false;
+                HandleConnection(client);
+            }
+            catch (Exception ex)
+            {
+                Log($"❌ Connexion échouée : {ex.Message}");
+                System.Windows.Forms.MessageBox.Show(
+                    $"Impossible de rejoindre {host}:{port}\n{ex.Message}",
+                    "Erreur de connexion",
+                    System.Windows.Forms.MessageBoxButtons.OK,
+                    System.Windows.Forms.MessageBoxIcon.Warning);
+            }
+        }
+
+        // ════════════════════════════════════════════════════════
+        //  DÉCONNEXION
+        // ════════════════════════════════════════════════════════
+        public void Disconnect()
+        {
+            _running    = false;
+            IsConnected = false;
+
+            _cts?.Cancel();
+            try { _tcpClient?.Close(); } catch { }
+            try { _listener?.Stop();   } catch { }
+            try { _udp?.Close();       } catch { }
+
+            _tcpClient = null;
+            _stream    = null;
+            _listener  = null;
+            _udp       = null;
+
+            if (_registeredOnWeb) _ = UnregisterWebAsync();
+            OnDisconnected?.Invoke();
+            Log("🔌 Déconnecté.");
+        }
+
+        // ════════════════════════════════════════════════════════
+        //  ENVOI DE PAQUETS
+        // ════════════════════════════════════════════════════════
+        public void SendPacket(Packet p)
+        {
+            if (_stream == null) return;
+            try
+            {
+                byte[] data = Encoding.UTF8.GetBytes(p.ToString() + "\n");
+                _stream.Write(data, 0, data.Length);
             }
             catch { Disconnect(); }
         }
 
-        private async Task ReadLoop(CancellationToken token)
+        // ════════════════════════════════════════════════════════
+        //  PRIVÉ — TCP LISTENER
+        // ════════════════════════════════════════════════════════
+        private void StartTcpListener()
         {
-            byte[] buffer = new byte[4096];
-            StringBuilder msgBuilder = new StringBuilder();
-
             try
             {
-                while (!token.IsCancellationRequested && tcpClient.Connected)
+                _listener = new TcpListener(IPAddress.Any, PORT_TCP);
+                _listener.Start();
+                Log($"📡 Serveur TCP démarré (port {PORT_TCP})");
+                _ = RegisterWebAsync();
+                _ = AcceptLoopAsync(_cts.Token);
+            }
+            catch
+            {
+                Log($"⚠️ Port {PORT_TCP} déjà utilisé — mode client uniquement.");
+            }
+        }
+
+        private async Task AcceptLoopAsync(CancellationToken ct)
+        {
+            while (_running && !IsConnected && !ct.IsCancellationRequested)
+            {
+                try
                 {
-                    int read = await listStream.ReadAsync(buffer, 0, buffer.Length, token);
-                    if (read == 0) break;
-                    
-                    msgBuilder.Append(Encoding.UTF8.GetString(buffer, 0, read));
-                    string content = msgBuilder.ToString();
-                    
-                    if (content.Contains("\n"))
+                    var client = await _listener.AcceptTcpClientAsync();
+                    if (IsConnected) { client.Close(); return; }
+                    Log("📥 Connexion entrante acceptée !");
+                    IsHost = true;
+                    HandleConnection(client);
+                }
+                catch { break; }
+            }
+        }
+
+        // ════════════════════════════════════════════════════════
+        //  PRIVÉ — UDP DISCOVERY (LAN)
+        // ════════════════════════════════════════════════════════
+        private async Task UdpDiscoveryLoop(CancellationToken ct)
+        {
+            try
+            {
+                _udp = new UdpClient();
+                _udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                _udp.Client.Bind(new IPEndPoint(IPAddress.Any, PORT_UDP));
+                _udp.EnableBroadcast = true;
+
+                // Envoi broadcast en boucle
+                _ = Task.Run(async () =>
+                {
+                    var ep = new IPEndPoint(IPAddress.Broadcast, PORT_UDP);
+                    while (!ct.IsCancellationRequested && !IsConnected)
                     {
-                        string[] msgs = content.Split('\n');
-                        for(int i=0; i<msgs.Length-1; i++)
-                        {
-                            var p = Packet.FromString(msgs[i]);
-                            if (p != null)
-                            {
-                                if (p.Type == "HELLO")
-                                {
-                                    OpponentPseudo = p.Sender;
-                                    Log($"Adversaire identifié : {OpponentPseudo}");
-                                }
-                                OnPacketReceived?.Invoke(p);
-                            }
-                        }
-                        msgBuilder.Clear();
-                        msgBuilder.Append(msgs[msgs.Length-1]);
+                        byte[] d = Encoding.UTF8.GetBytes($"{DISCOVER_MSG}|{MyPseudo}|{MyLocalIP}|{_myGuid}");
+                        try { await _udp.SendAsync(d, d.Length, ep); } catch { break; }
+                        await Task.Delay(1000, ct);
+                    }
+                }, ct);
+
+                // Écoute broadcast
+                while (!ct.IsCancellationRequested && !IsConnected)
+                {
+                    var result = await _udp.ReceiveAsync();
+                    string msg = Encoding.UTF8.GetString(result.Buffer);
+                    if (!msg.StartsWith(DISCOVER_MSG)) continue;
+
+                    string[] parts = msg.Split('|');
+                    if (parts.Length < 4 || parts[3] == _myGuid) continue;
+
+                    Log($"🎯 Joueur LAN détecté : {parts[1]} ({parts[2]})");
+
+                    // Déterminisme : le GUID le plus petit est client
+                    if (string.Compare(_myGuid, parts[3], StringComparison.Ordinal) > 0)
+                    {
+                        Log("→ Je suis CLIENT (GUID)");
+                        ConnectDirectly(parts[2]);
+                        break;
                     }
                 }
             }
-            catch {}
-            finally { Disconnect(); }
+            catch (Exception ex) { if (!ct.IsCancellationRequested) Log("UDP: " + ex.Message); }
         }
 
-        public void Disconnect()
+        // ════════════════════════════════════════════════════════
+        //  PRIVÉ — GESTION CONNEXION ÉTABLIE
+        // ════════════════════════════════════════════════════════
+        private void HandleConnection(TcpClient client)
         {
-            running = false;
-            IsConnected = false;
-            cts?.Cancel();
-            tcpClient?.Close();
-            tcpListener?.Stop();
-            udpSock?.Close();
-            UnregisterFromWebLobby();
-            OnDisconnected?.Invoke();
-            Log("Déconnecté.");
+            if (IsConnected) { client.Close(); return; }
+
+            IsConnected = true;
+            _tcpClient  = client;
+            _stream     = client.GetStream();
+
+            Log("✅ Connecté !");
+            SendPacket(new Packet("HELLO", MyPseudo, CurrentGameType));
+            OnConnected?.Invoke();
+
+            _ = ReadLoopAsync(_cts.Token);
         }
 
+        private async Task ReadLoopAsync(CancellationToken ct)
+        {
+            var buffer  = new byte[8192];
+            var builder = new StringBuilder();
+
+            try
+            {
+                while (!ct.IsCancellationRequested && _tcpClient?.Connected == true)
+                {
+                    int n = await _stream.ReadAsync(buffer, 0, buffer.Length, ct);
+                    if (n == 0) break;
+
+                    builder.Append(Encoding.UTF8.GetString(buffer, 0, n));
+                    string buf = builder.ToString();
+
+                    int nl;
+                    while ((nl = buf.IndexOf('\n')) >= 0)
+                    {
+                        string line = buf.Substring(0, nl);
+                        buf = buf.Substring(nl + 1);
+
+                        var p = Packet.FromString(line);
+                        if (p == null) continue;
+
+                        if (p.Type == "HELLO")
+                        {
+                            OpponentPseudo = p.Sender;
+                            Log($"👤 Adversaire : {OpponentPseudo}");
+                        }
+                        OnPacketReceived?.Invoke(p);
+                    }
+                    builder.Clear();
+                    builder.Append(buf);
+                }
+            }
+            catch { }
+            finally { if (IsConnected) Disconnect(); }
+        }
+
+        // ════════════════════════════════════════════════════════
+        //  WEB LOBBY — Enregistrement + Ping loop
+        // ════════════════════════════════════════════════════════
+        private async Task RegisterWebAsync()
+        {
+            Log("🌍 Enregistrement sur le Lobby Web …");
+            MyPublicIP = await Lobby.GetPublicIPAsync();
+            if (string.IsNullOrEmpty(MyPublicIP))
+            { Log("⚠️ IP publique introuvable — lobby ignoré."); return; }
+
+            Log($"IP publique : {MyPublicIP}");
+
+            // Lire maxPlayers depuis le contexte courant (2 par défaut)
+            int? id = await Lobby.RegisterServerAsync(
+                name       : MyPseudo,
+                publicIp   : MyPublicIP,
+                localIp    : MyLocalIP,
+                port       : PORT_TCP,
+                gameType   : CurrentGameType,
+                maxPlayers : 2,
+                hostPseudo : MyPseudo);
+
+            if (id == null) { Log("❌ Échec enregistrement."); return; }
+
+            _registeredOnWeb = true;
+            Log($"✅ Salon enregistré (ID {id})");
+            _ = PingLoopAsync();
+        }
+
+        private async Task PingLoopAsync()
+        {
+            while (_registeredOnWeb && _running && !IsConnected)
+            {
+                await Task.Delay(PING_INTERVAL);
+                if (!_registeredOnWeb || !_running || IsConnected) break;
+
+                if (!string.IsNullOrEmpty(MyPublicIP))
+                    await Lobby.PingAsync(MyPublicIP, PORT_TCP);
+            }
+        }
+
+        private async Task UnregisterWebAsync()
+        {
+            _registeredOnWeb = false;
+            if (!string.IsNullOrEmpty(MyPublicIP))
+                await Lobby.RemoveServerAsync(MyPublicIP, PORT_TCP);
+        }
+
+        // ════════════════════════════════════════════════════════
+        //  UTILITAIRES
+        // ════════════════════════════════════════════════════════
         public string GetLocalIP()
         {
             try
             {
-                using (Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, 0))
+                using (var s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, 0))
                 {
-                    socket.Connect("8.8.8.8", 65530);
-                    IPEndPoint endPoint = socket.LocalEndPoint as IPEndPoint;
-                    return endPoint.Address.ToString();
+                    s.Connect("8.8.8.8", 65530);
+                    return ((IPEndPoint)s.LocalEndPoint).Address.ToString();
                 }
             }
             catch { return "127.0.0.1"; }
         }
 
-        // Public helper to host a salon with a given name (sets pseudo and starts listening + registers to web lobby)
-        public void HostSalon(string salonName)
+        private void TryUnlockFirewall()
         {
-            if (running) Disconnect();
-            running = true;
-            IsConnected = false;
-            MyPseudo = salonName;
-            cts = new CancellationTokenSource();
-
-            // Start listening (this will call RegisterToWebLobby internally)
-            StartListening();
+            try
+            {
+                string exe  = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
+                string rule = "CuencaGames_TCP";
+                Run("netsh", $"advfirewall firewall delete rule name=\"{rule}\"");
+                Run("netsh", $"advfirewall firewall add rule name=\"{rule}\" dir=in action=allow program=\"{exe}\" enable=yes protocol=tcp localport={PORT_TCP}");
+                Run("netsh", $"advfirewall firewall add rule name=\"CuencaGames_UDP\" dir=in action=allow program=\"{exe}\" enable=yes protocol=udp localport={PORT_UDP}");
+            }
+            catch { }
         }
 
-        // ════════════════════════════════════════════════════════════
-        //  WEB LOBBY (Hostinger)
-        // ════════════════════════════════════════════════════════════
-        public LobbyClient Lobby { get; private set; } = new LobbyClient();
-        private bool _registeredToLobby = false;
-
-        private async void RegisterToWebLobby()
+        private static void Run(string exe, string args)
         {
-            if (_registeredToLobby) return;
-            Log("🌍 Connexion au Lobby Web...");
-
-            string publicIp = await Lobby.GetPublicIP();
-            if (string.IsNullOrEmpty(publicIp))
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
-                Log("⚠️ Impossible de récupérer l'IP Publique. Lobby ignoré.");
-                return;
-            }
-
-            Log($"Mon IP Publique : {publicIp}");
-            
-            int? id = await Lobby.RegisterServer(MyPseudo, publicIp, MyIP, PORT_TCP);
-            
-            if (id != null)
-            {
-                _registeredToLobby = true;
-                Log("✅ Serveur enregistré sur le Web ! (ID: " + id + ")");
-                
-                // Lancer la boucle de Ping pour rester visible
-                _ = LobbyPingLoop();
-            }
-            else
-            {
-                Log("❌ Échec enregistrement Web.");
-            }
+                FileName = exe, Arguments = args,
+                UseShellExecute = false, CreateNoWindow = true, Verb = "runas"
+            });
         }
-
-        private async Task LobbyPingLoop()
-        {
-            while (_registeredToLobby && running && !IsConnected)
-            {
-                await Task.Delay(60000); // 60 secondes
-                if (!_registeredToLobby || !running || IsConnected) break;
-
-                string publicIp = await Lobby.GetPublicIP();
-                if (!string.IsNullOrEmpty(publicIp))
-                {
-                    await Lobby.RegisterServer(MyPseudo, publicIp, MyIP, PORT_TCP);
-                }
-            }
-        }
-
-        private async void UnregisterFromWebLobby()
-        {
-            if (!_registeredToLobby) return;
-            string publicIp = await Lobby.GetPublicIP();
-            if (!string.IsNullOrEmpty(publicIp))
-            {
-                await Lobby.RemoveServer(publicIp, PORT_TCP);
-                Log("Serveur retiré du Lobby Web.");
-            }
-            _registeredToLobby = false;
-        }
-
     }
 }

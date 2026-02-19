@@ -85,6 +85,8 @@
     </Compile>
     <Compile Include="NetworkManager.cs" />
     <Compile Include="LobbyClient.cs" />
+    <Compile Include="Leaderboard.cs" />
+    <Compile Include="UpdateManager.cs" />
     <Compile Include="puissance_4.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -94,8 +96,22 @@
     <Compile Include="Snake.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="UserConfig.cs" />
     <Compile Include="Form3.Designer.cs">
       <DependentUpon>Snake.cs</DependentUpon>
+    </Compile>
+    <Compile Include="FormUtils.cs" />
+    <Compile Include="4Cheveaux.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="4Cheveaux.Designer.cs">
+      <DependentUpon>4Cheveaux.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Echec.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Echec.Designer.cs">
+      <DependentUpon>Echec.cs</DependentUpon>
     </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
@@ -131,6 +147,12 @@
     </Compile>
     <EmbeddedResource Include="Snake.resx">
       <DependentUpon>Snake.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="4Cheveaux.resx">
+      <DependentUpon>4Cheveaux.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Echec.resx">
+      <DependentUpon>Echec.cs</DependentUpon>
     </EmbeddedResource>
     <None Include="Properties\Settings.settings">
       <Generator>SettingsSingleFileGenerator</Generator>

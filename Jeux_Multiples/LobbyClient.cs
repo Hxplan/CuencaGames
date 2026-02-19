@@ -7,86 +7,179 @@ using System.Web.Script.Serialization;
 
 namespace Jeux_Multiples
 {
+    // ════════════════════════════════════════════════════════════
+    //  MODÈLE D'UN SERVEUR LISTÉ
+    // ════════════════════════════════════════════════════════════
     public class ServerInfo
     {
-        public int id { get; set; }
-        public string server_name { get; set; }
-        public string ip_address { get; set; }
-        public string local_ip { get; set; }
-        public int port { get; set; }
-        public string created_at { get; set; }
+        public int    id              { get; set; }
+        public string server_name    { get; set; }
+        public string host_pseudo    { get; set; }
+        public string ip_address     { get; set; }
+        public string local_ip       { get; set; }
+        public int    port           { get; set; }
+        public string game_type      { get; set; } = "any";
+        public int    current_players { get; set; } = 1;
+        public int    max_players    { get; set; } = 2;
+
+        public bool IsFull => current_players >= max_players;
+
+        // Affichage dans la ListBox
+        public override string ToString()
+        {
+            string full = IsFull ? " [PLEIN]" : "";
+            return $"[{game_type}]  {server_name}  —  {host_pseudo}  ({current_players}/{max_players}){full}  [{ip_address}]";
+        }
     }
 
+    // ════════════════════════════════════════════════════════════
+    //  CLIENT HTTP → lobby_api.php
+    // ════════════════════════════════════════════════════════════
     public class LobbyClient
     {
-        // URL publique de l'API Lobby (mettre à jour si changé)
         private const string API_URL = "https://cuencamathieu.com/lobby_api.php";
-        
-        private static readonly HttpClient client = new HttpClient();
-        private static readonly JavaScriptSerializer serializer = new JavaScriptSerializer();
 
-        public async Task<string> GetPublicIP()
+        private static readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+        private static readonly JavaScriptSerializer _json = new JavaScriptSerializer();
+
+        // ── IP publique ───────────────────────────────────────────
+        public async Task<string> GetPublicIPAsync()
         {
-            try
-            {
-                return await client.GetStringAsync("https://api.ipify.org");
-            }
-            catch 
-            {
-                return null;
-            }
+            try { return (await _http.GetStringAsync("https://api.ipify.org")).Trim(); }
+            catch { }
+            try { return (await _http.GetStringAsync("https://checkip.amazonaws.com")).Trim(); }
+            catch { return null; }
         }
 
-        public async Task<int?> RegisterServer(string name, string publicIp, string localIp, int port)
+        // ── Enregistrer / mettre à jour le salon ─────────────────
+        public async Task<int?> RegisterServerAsync(
+            string name, string publicIp, string localIp, int port,
+            string gameType = "any", int maxPlayers = 2, string hostPseudo = "")
         {
             try
             {
-            var data = new { name = name, ip = publicIp, local_ip = localIp, port = port };
-                var json = serializer.Serialize(data);
-                var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-                var response = await client.PostAsync(API_URL + "?action=host", content);
-                if (response.IsSuccessStatusCode)
-                {
-                    string resJson = await response.Content.ReadAsStringAsync();
-                    var dict = serializer.Deserialize<Dictionary<string, object>>(resJson);
-                    
-                    if (dict.ContainsKey("id"))
-                        return Convert.ToInt32(dict["id"]);
-                }
+                var payload = new {
+                    name        = name,
+                    ip          = publicIp,
+                    local_ip    = localIp,
+                    port        = port,
+                    game_type   = gameType,
+                    max_players = maxPlayers,
+                    host_pseudo = hostPseudo
+                };
+                var resp = await PostJsonAsync("?action=host", payload);
+                if (resp != null && resp.ContainsKey("id"))
+                    return Convert.ToInt32(resp["id"]);
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine("Lobby Register Error: " + ex.Message);
-            }
+            catch (Exception ex) { Log("RegisterServer: " + ex.Message); }
             return null;
         }
 
-        public async Task<List<ServerInfo>> GetServers()
+        // ── Lister les salons actifs ──────────────────────────────
+        public async Task<List<ServerInfo>> GetServersAsync(string gameTypeFilter = null)
         {
             try
             {
-                var response = await client.GetStringAsync(API_URL + "?action=list");
-                return serializer.Deserialize<List<ServerInfo>>(response);
+                string url = API_URL + "?action=list";
+                if (!string.IsNullOrEmpty(gameTypeFilter) && gameTypeFilter != "Tous")
+                    url += "&game_type=" + Uri.EscapeDataString(gameTypeFilter);
+
+                string raw = await _http.GetStringAsync(url);
+                return _json.Deserialize<List<ServerInfo>>(raw) ?? new List<ServerInfo>();
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Lobby List Error: " + ex.Message);
+                Log("GetServers: " + ex.Message);
                 return new List<ServerInfo>();
             }
         }
 
-        public async Task RemoveServer(string ip, int port)
+        // ── Ping / heartbeat ──────────────────────────────────────
+        public async Task<bool> PingAsync(string publicIp, int port)
         {
             try
             {
-                var data = new { ip = ip, port = port };
-                var json = serializer.Serialize(data);
-                var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-                await client.PostAsync(API_URL + "?action=remove", content);
+                var resp = await PostJsonAsync("?action=ping", new { ip = publicIp, port = port });
+                return resp != null && resp.ContainsKey("success");
             }
-            catch { }
+            catch { return false; }
         }
+
+        // ── Mettre à jour le nombre de joueurs ────────────────────
+        public async Task UpdatePlayersAsync(string publicIp, int port, int currentPlayers)
+        {
+            try
+            {
+                await PostJsonAsync("?action=update_players",
+                    new { ip = publicIp, port = port, current_players = currentPlayers });
+            }
+            catch (Exception ex) { Log("UpdatePlayers: " + ex.Message); }
+        }
+
+        // ── Retirer le salon ──────────────────────────────────────
+        public async Task RemoveServerAsync(string publicIp, int port)
+        {
+            try
+            {
+                await PostJsonAsync("?action=remove", new { ip = publicIp, port = port });
+            }
+            catch (Exception ex) { Log("RemoveServer: " + ex.Message); }
+        }
+
+        // ════════════════════════════════════════════════════════
+        //  LEADERBOARD (en ligne)
+        // ════════════════════════════════════════════════════════
+        public async Task<bool> RecordWinAsync(string pseudo, string gameType)
+        {
+            try
+            {
+                var resp = await PostJsonAsync("?action=lb_record_win", new { pseudo = pseudo, game_type = gameType });
+                return resp != null && resp.ContainsKey("success");
+            }
+            catch (Exception ex) { Log("RecordWin: " + ex.Message); return false; }
+        }
+
+        public async Task<bool> RecordSnakeScoreAsync(string pseudo, int score)
+        {
+            try
+            {
+                var resp = await PostJsonAsync("?action=lb_record_snake", new { pseudo = pseudo, score = score });
+                return resp != null && resp.ContainsKey("success");
+            }
+            catch (Exception ex) { Log("RecordSnake: " + ex.Message); return false; }
+        }
+
+        /// <summary>
+        /// Retourne un dictionnaire: game_type -> liste d'items {pseudo, value}.
+        /// </summary>
+        public async Task<Dictionary<string, List<Dictionary<string, object>>>> GetLeaderboardAsync()
+        {
+            try
+            {
+                string raw = await _http.GetStringAsync(API_URL + "?action=lb_list");
+                return _json.Deserialize<Dictionary<string, List<Dictionary<string, object>>>>(raw)
+                       ?? new Dictionary<string, List<Dictionary<string, object>>>();
+            }
+            catch (Exception ex)
+            {
+                Log("GetLeaderboard: " + ex.Message);
+                return new Dictionary<string, List<Dictionary<string, object>>>();
+            }
+        }
+
+        // ── Helper HTTP POST JSON ─────────────────────────────────
+        private async Task<Dictionary<string, object>> PostJsonAsync(string queryString, object payload)
+        {
+            string json    = _json.Serialize(payload);
+            var    content = new StringContent(json, Encoding.UTF8, "application/json");
+            var    resp    = await _http.PostAsync(API_URL + queryString, content);
+
+            if (!resp.IsSuccessStatusCode) return null;
+
+            string body = await resp.Content.ReadAsStringAsync();
+            return _json.Deserialize<Dictionary<string, object>>(body);
+        }
+
+        private void Log(string msg) => System.Diagnostics.Debug.WriteLine("[LobbyClient] " + msg);
     }
 }

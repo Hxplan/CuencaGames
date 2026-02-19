@@ -32,3 +32,5 @@ C:\Users\Hoplan\Desktop\CuencaGames\Jeux_Multiples\obj\Debug\Jeux_Multiples.pdb
 C:\Users\Hoplan\Desktop\CuencaGames\Jeux_Multiples\bin\Debug\Jeux_Multiples.exe.config
 C:\Users\Hoplan\Desktop\CuencaGames\Jeux_Multiples\bin\Debug\Jeux_Multiples.exe
 C:\Users\Hoplan\Desktop\CuencaGames\Jeux_Multiples\bin\Debug\Jeux_Multiples.pdb
+C:\Users\Hoplan\Desktop\CuencaGames\Jeux_Multiples\obj\Debug\Jeux_Multiples.EcranAccueil.resources
+C:\Users\Hoplan\Desktop\CuencaGames\Jeux_Multiples\obj\Debug\Jeux_Multiples.Echec.resources

@@ -28,32 +28,36 @@ namespace Jeux_Multiples
         private const int OFFSET_PLATEAU = 50;
         private const int MARGE_TOP = 80;
 
+        private Panel gameContainer;
+
         public Echec()
         {
             InitializeComponent();
+            FormUtils.ApplyFullScreen(this); // Full Screen
             InitialiserPlateau();
             InitialiserPieces();
+            
+            this.Resize += (s, e) => 
+            {
+               if (gameContainer != null) FormUtils.CenterControl(gameContainer, this);
+            };
         }
 
         private void Echec_Load(object sender, EventArgs e)
         {
             this.Text = "♔  Jeu d'Échecs  ♚";
-            int largeur = TAILLE_CASE * 8 + OFFSET_PLATEAU * 2 + 20;
-            int hauteur = TAILLE_CASE * 8 + OFFSET_PLATEAU * 2 + MARGE_TOP + 40;
-            this.ClientSize = new Size(largeur, hauteur);
-            this.StartPosition = FormStartPosition.CenterScreen;
-            this.FormBorderStyle = FormBorderStyle.FixedSingle;
-            this.MaximizeBox = false;
-            this.BackColor = CouleurPanel;
             this.DoubleBuffered = true;
+            // Center initially
+            if (gameContainer != null) FormUtils.CenterControl(gameContainer, this);
         }
 
-        protected override void OnPaint(PaintEventArgs e)
+        // DESSIN DU PLATEAU (déplacé sur le container)
+        private void GameContainer_Paint(object sender, PaintEventArgs e)
         {
-            base.OnPaint(e);
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
+            // Rectangle du plateau (bois)
             Rectangle cadre = new Rectangle(
                 OFFSET_PLATEAU - 8, MARGE_TOP - 8,
                 TAILLE_CASE * 8 + 16, TAILLE_CASE * 8 + 16);
@@ -65,6 +69,7 @@ namespace Jeux_Multiples
             using (Pen pen = new Pen(Color.FromArgb(180, 140, 60), 2))
                 g.DrawRoundedRect(pen, cadre, 8);
 
+            // Coordonnées
             Font coordFont = new Font("Georgia", 10, FontStyle.Bold);
             for (int c = 0; c < 8; c++)
             {
@@ -89,9 +94,23 @@ namespace Jeux_Multiples
             plateau = new Piece[8, 8];
             mouvementsPossibles = new List<Point>();
 
+            // Calculate size needed for the game
+            int largeur = TAILLE_CASE * 8 + OFFSET_PLATEAU * 2 + 20;
+            int hauteur = TAILLE_CASE * 8 + OFFSET_PLATEAU * 2 + MARGE_TOP + 40;
+
+            // Create Container
+            gameContainer = new Panel
+            {
+                Size = new Size(largeur, hauteur),
+                BackColor = Color.Transparent
+            };
+            this.Controls.Add(gameContainer);
+            gameContainer.Paint += GameContainer_Paint;
+
+            // Header (Title + Turn info)
             Panel header = new Panel
             {
-                Size = new Size(TAILLE_CASE * 8 + OFFSET_PLATEAU * 2, MARGE_TOP - 10),
+                Size = new Size(largeur, MARGE_TOP - 10),
                 Location = new Point(0, 0),
                 BackColor = Color.Transparent
             };
@@ -112,7 +131,20 @@ namespace Jeux_Multiples
                 Name = "labelTour",
                 Location = new Point(12, 42)
             });
-            this.Controls.Add(header);
+            gameContainer.Controls.Add(header);
+
+            // Back Button
+            var btnAccueil = FormUtils.CreateBackButton(this, () => 
+            {
+                 var acc = new Accueil();
+                 acc.Show();
+                 this.Close();
+            });
+            // Position it relative to container or just add to container
+            // Let's add it to container bottom-left
+            btnAccueil.Parent = gameContainer;
+            btnAccueil.Location = new Point(10, hauteur - 45);
+            btnAccueil.BringToFront();
 
             for (int ligne = 0; ligne < 8; ligne++)
                 for (int col = 0; col < 8; col++)
@@ -132,7 +164,7 @@ namespace Jeux_Multiples
                     btn.FlatAppearance.MouseOverBackColor = Color.Empty;
                     btn.Click += Case_Click;
                     cases[ligne, col] = btn;
-                    this.Controls.Add(btn);
+                    gameContainer.Controls.Add(btn);
                 }
         }
 

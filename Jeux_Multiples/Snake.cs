@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -46,6 +46,8 @@ namespace Jeux_Multiples
         private const int MARGE = 10;
         private int zonjeJeuLargeur;
         private int zoneJeuHauteur;
+        private int zoneX;
+        private int zoneY;
 
         // Animation nourriture
         private float angleNourriture = 0f;
@@ -55,8 +57,7 @@ namespace Jeux_Multiples
         //  BOUTONS DE NAVIGATION
         // ══════════════════════════════════════════
         private Button btnAccueil;
-        private Button btnPuissance4;
-        private Button btnMortPion;
+        private Rectangle _restartRect = Rectangle.Empty;
 
         public string Joueur = "Joueur";
 
@@ -75,18 +76,23 @@ namespace Jeux_Multiples
         private void InitialiserJeu()
         {
             this.Text = $"SNAKE — ARCADE ({Joueur})";
-            this.Width = 700;
-            this.Height = 700;
-            this.MinimumSize = new Size(700, 700);
-            this.MaximumSize = new Size(700, 700);
+            FormUtils.ApplyFullScreen(this);
+            
             this.DoubleBuffered = true;
             this.KeyPreview = true;
             this.BackColor = couleurFond;
-            this.FormBorderStyle = FormBorderStyle.FixedSingle;
 
-            // Calcul des zones
-            zonjeJeuLargeur = this.ClientSize.Width - PANNEAU_DROITE - MARGE * 3;
-            zoneJeuHauteur = this.ClientSize.Height - PANNEAU_HAUT - MARGE * 2;
+            // Calcul des zones adaptatif
+            // On veut que la zone de jeu soit un multiple de tailleCase
+            int wDispo = this.ClientSize.Width - PANNEAU_DROITE - MARGE * 3;
+            int hDispo = this.ClientSize.Height - PANNEAU_HAUT - MARGE * 2;
+            
+            zonjeJeuLargeur = (wDispo / tailleCase) * tailleCase;
+            zoneJeuHauteur  = (hDispo / tailleCase) * tailleCase;
+            zoneY = PANNEAU_HAUT + MARGE;
+            // Centrer horizontalement l'ensemble (zone de jeu + panneau droit + marges)
+            int totalW = zonjeJeuLargeur + PANNEAU_DROITE + MARGE * 3;
+            zoneX = Math.Max(MARGE, (this.ClientSize.Width - totalW) / 2 + MARGE);
 
             // Timer principal
             timer = new Timer();
@@ -102,6 +108,8 @@ namespace Jeux_Multiples
             // Événements
             this.Paint += Snake_Paint;
             this.KeyDown += Snake_KeyDown;
+            this.MouseClick += Snake_MouseClick;
+            this.Shown += (s, e) => this.Focus();
 
             // Créer les boutons de navigation
             CreerBoutonsNavigation();
@@ -112,12 +120,12 @@ namespace Jeux_Multiples
         private void CreerBoutonsNavigation()
         {
             // Position X de départ : dans le panneau droit
-            int bx = MARGE + zonjeJeuLargeur + MARGE * 2;
+            int bx = zoneX + zonjeJeuLargeur + MARGE * 2;
             int bLargeur = PANNEAU_DROITE - MARGE - 20;
             int bHauteur = 34;
 
             // Les boutons sont placés en bas du panneau latéral
-            int byBase = PANNEAU_HAUT + MARGE + zoneJeuHauteur - (bHauteur * 3 + 30);
+            int byBase = zoneY + zoneJeuHauteur - (bHauteur + 10);
 
             // ── Bouton Accueil ──
             btnAccueil = CreerBoutonNeon("⌂  ACCUEIL",
@@ -132,34 +140,6 @@ namespace Jeux_Multiples
                 this.Close();
             };
             this.Controls.Add(btnAccueil);
-
-            // ── Bouton Puissance 4 ──
-            btnPuissance4 = CreerBoutonNeon("◉  PUISSANCE 4",
-                Color.FromArgb(255, 180, 0),   // jaune/orange
-                bx, byBase + bHauteur + 10, bLargeur, bHauteur);
-            btnPuissance4.Click += (s, e) =>
-            {
-                timer.Stop();
-                timerAnimation.Stop();
-                Puissance_4 p4 = new Puissance_4 (Joueur, "Joueur 2");
-                p4.Show();
-                this.Close();
-            };
-            this.Controls.Add(btnPuissance4);
-
-            // ── Bouton Mort Pion ──
-            btnMortPion = CreerBoutonNeon("♟  MORT PION",
-                Color.FromArgb(255, 34, 68),   // rouge néon
-                bx, byBase + (bHauteur + 10) * 2, bLargeur, bHauteur);
-            btnMortPion.Click += (s, e) =>
-            {
-                timer.Stop();
-                timerAnimation.Stop();
-                mort_Pion mp = new mort_Pion(Joueur, "Joueur 2");
-                mp.Show();
-                this.Close();
-            };
-            this.Controls.Add(btnMortPion);
         }
 
         private Button CreerBoutonNeon(string texte, Color couleurNeon, int x, int y, int w, int h)
@@ -295,37 +275,37 @@ namespace Jeux_Multiples
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
 
             // Origines des zones
-            int zoneX = MARGE;
-            int zoneY = PANNEAU_HAUT + MARGE;
+            int zx = zoneX;
+            int zy = zoneY;
 
             // 1) Fond général
             g.Clear(couleurFond);
 
             // 2) Grille de jeu
-            DessinerGrille(g, zoneX, zoneY);
+            DessinerGrille(g, zx, zy);
 
             // 3) Bordure de la zone de jeu
-            DessinerBordureNeon(g, zoneX - 2, zoneY - 2, zonjeJeuLargeur + 4, zoneJeuHauteur + 4, couleurNeonVert);
+            DessinerBordureNeon(g, zx - 2, zy - 2, zonjeJeuLargeur + 4, zoneJeuHauteur + 4, couleurNeonVert);
 
             // 4) Panneau du haut (score)
             DessinerPanneauHaut(g);
 
             // 5) Panneau latéral droit
-            DessinerPanneauDroit(g, zoneX + zonjeJeuLargeur + MARGE * 2, zoneY);
+            DessinerPanneauDroit(g, zx + zonjeJeuLargeur + MARGE * 2, zy);
 
             // 6) Nourriture
-            DessinerNourriture(g, zoneX, zoneY);
+            DessinerNourriture(g, zx, zy);
 
             // 7) Serpent
-            DessinerSerpent(g, zoneX, zoneY);
+            DessinerSerpent(g, zx, zy);
 
             // 8) Overlay démarrage
             if (!jeuDemarre && jeuEnCours)
-                DessinerOverlayDemarrage(g, zoneX, zoneY);
+                DessinerOverlayDemarrage(g, zx, zy);
 
             // 9) Overlay Game Over
             if (!jeuEnCours)
-                DessinerOverlayGameOver(g, zoneX, zoneY);
+                DessinerOverlayGameOver(g, zx, zy);
         }
 
         // ──────────────────────────────────────────
@@ -386,7 +366,6 @@ namespace Jeux_Multiples
         {
             // Positions selon la direction
             Point oeil1, oeil2;
-            int d = 4;
             switch (direction)
             {
                 case 0: oeil1 = new Point(x + 4, y + 4); oeil2 = new Point(x + 13, y + 4); break;
@@ -684,6 +663,7 @@ namespace Jeux_Multiples
             // Bouton RECOMMENCER
             int bw = 200, bh = 36;
             Rectangle bouton = new Rectangle(cx + (cw - bw) / 2, cy + 148, bw, bh);
+            _restartRect = bouton;
             using (SolidBrush br = new SolidBrush(Color.FromArgb(40, couleurNeonVert)))
                 g.FillRectangle(br, bouton);
             DessinerBordureNeon(g, bouton.X, bouton.Y, bouton.Width, bouton.Height, couleurNeonVert);
@@ -802,6 +782,30 @@ namespace Jeux_Multiples
         }
         #endregion
 
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            // Assurer que les flèches fonctionnent même si un contrôle a le focus.
+            var k = keyData & Keys.KeyCode;
+            if (k == Keys.Up || k == Keys.Down || k == Keys.Left || k == Keys.Right ||
+                k == Keys.Z || k == Keys.S || k == Keys.Q || k == Keys.D || k == Keys.A ||
+                k == Keys.Space)
+            {
+                Snake_KeyDown(this, new KeyEventArgs(k));
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        private void Snake_MouseClick(object sender, MouseEventArgs e)
+        {
+            // Clic sur "RECOMMENCER" (overlay Game Over)
+            if (!jeuEnCours && _restartRect != Rectangle.Empty && _restartRect.Contains(e.Location))
+            {
+                DemarrerNouveauJeu();
+                this.Focus();
+            }
+        }
+
         #region Game Over
         // ══════════════════════════════════════════
         //  GAME OVER
@@ -811,6 +815,11 @@ namespace Jeux_Multiples
             jeuEnCours = false;
             jeuDemarre = false;
             timer.Stop();
+            if (highScore > 0)
+            {
+                try { _ = NetworkManager.Instance.Lobby.RecordSnakeScoreAsync(Joueur, highScore); } catch { }
+            }
+            _restartRect = Rectangle.Empty;
             this.Invalidate();
             // Pas de MessageBox — le Game Over est dessiné directement sur le canvas
         }

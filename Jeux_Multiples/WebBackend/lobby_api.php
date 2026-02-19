@@ -41,6 +41,9 @@ if (empty($action) && strpos($_SERVER['HTTP_ACCEPT'] ?? '', 'text/html') !== fal
         <li><b>host</b> (POST JSON) : enregistrer un serveur. Champs: <code>name</code>, <code>ip</code>, <code>port</code>.</li>
         <li><b>list</b> (GET) : récupérer la liste des serveurs actifs.</li>
         <li><b>remove</b> (POST JSON) : supprimer un serveur. Champs: <code>ip</code>, <code>port</code>.</li>
+        <li><b>lb_record_win</b> (POST JSON) : enregistrer une victoire. Champs: <code>pseudo</code>, <code>game_type</code>.</li>
+        <li><b>lb_record_snake</b> (POST JSON) : enregistrer un score Snake (meilleur). Champs: <code>pseudo</code>, <code>score</code>.</li>
+        <li><b>lb_list</b> (GET) : récupérer le classement. Param optionnel: <code>game_type</code>.</li>
     </ul>
     <h2>Exemples</h2>
     <p>Lister :</p>
@@ -50,12 +53,38 @@ if (empty($action) && strpos($_SERVER['HTTP_ACCEPT'] ?? '', 'text/html') !== fal
     <p>Supprimer :</p>
     <pre>curl -X POST "https://cuencamathieu.com/lobby_api.php?action=remove" -H "Content-Type: application/json" -d '{"ip":"1.2.3.4","port":8080}'</pre>
 
+    <p>Leaderboard (victoire) :</p>
+    <pre>curl -X POST "https://cuencamathieu.com/lobby_api.php?action=lb_record_win" -H "Content-Type: application/json" -d '{"pseudo":"Alice","game_type":"Puissance4"}'</pre>
+    <p>Leaderboard (Snake score) :</p>
+    <pre>curl -X POST "https://cuencamathieu.com/lobby_api.php?action=lb_record_snake" -H "Content-Type: application/json" -d '{"pseudo":"Alice","score":1230}'</pre>
+    <p>Leaderboard (liste) :</p>
+    <pre>curl "https://cuencamathieu.com/lobby_api.php?action=lb_list"</pre>
+
     <h2>Diagnostic</h2>
-    <p>Si l'API renvoie <code>{"error":"Action inconnue (host, list, remove)"}</code>, vérifiez que vous appelez avec <code>?action=host</code>, <code>?action=list</code> ou <code>?action=remove</code>.</p>
+    <p>Si l'API renvoie <code>{"error":"Action inconnue"}</code>, vérifiez l'URL <code>?action=...</code>.</p>
 </body>
 </html>
 HTML;
         exit;
+}
+
+// ════════════════════════════════════════════════════════
+//  LEADERBOARD HELPERS
+// ════════════════════════════════════════════════════════
+function ensure_leaderboard_table($pdo) {
+    try {
+        $pdo->query("CREATE TABLE IF NOT EXISTS leaderboard_stats (
+            pseudo     VARCHAR(32) NOT NULL,
+            game_type  VARCHAR(32) NOT NULL,
+            wins       INT NOT NULL DEFAULT 0,
+            best_score INT NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (pseudo, game_type),
+            KEY idx_game_type (game_type),
+            KEY idx_wins (wins),
+            KEY idx_best_score (best_score)
+        )");
+    } catch (Exception $e) { /* ignore */ }
 }
 
 if ($action === 'host') {
@@ -71,6 +100,8 @@ if ($action === 'host') {
     $ip = filter_var($input['ip'], FILTER_VALIDATE_IP);
     $local_ip = isset($input['local_ip']) ? filter_var($input['local_ip'], FILTER_VALIDATE_IP) : null;
     $port = intval($input['port']);
+    $game_type = isset($input['game_type']) ? substr(trim(strip_tags($input['game_type'])), 0, 32) : 'any';
+    $host_pseudo = isset($input['host_pseudo']) ? substr(trim(strip_tags($input['host_pseudo'])), 0, 64) : $name;
 
     if (!$ip || $port <= 0 || $port > 65535) {
         echo json_encode(["error" => "IP ou Port invalide"]);
@@ -81,22 +112,19 @@ if ($action === 'host') {
     $stmt = $pdo->prepare("DELETE FROM game_servers WHERE ip_address = ? AND port = ?");
     $stmt->execute([$ip, $port]);
 
-    // Ensure local_ip column exists (best-effort)
-    try {
-        $col = $pdo->query("SHOW COLUMNS FROM game_servers LIKE 'local_ip'")->fetch();
-        if (!$col) {
-            $pdo->query("ALTER TABLE game_servers ADD COLUMN local_ip VARCHAR(45) NULL");
-        }
-    } catch (Exception $e) { /* ignore if cannot alter */ }
-
-    // Insertion (incluant local_ip si fourni)
-    if ($local_ip) {
-        $stmt = $pdo->prepare("INSERT INTO game_servers (server_name, ip_address, local_ip, port) VALUES (?, ?, ?, ?)");
-        $stmt->execute([$name, $ip, $local_ip, $port]);
-    } else {
-        $stmt = $pdo->prepare("INSERT INTO game_servers (server_name, ip_address, port) VALUES (?, ?, ?)");
-        $stmt->execute([$name, $ip, $port]);
+    // Ensure optional columns exist (best-effort)
+    foreach (['local_ip' => 'VARCHAR(45) NULL', 'game_type' => 'VARCHAR(32) NOT NULL DEFAULT \'any\'', 'host_pseudo' => 'VARCHAR(64) NULL'] as $col => $def) {
+        try {
+            $colCheck = $pdo->query("SHOW COLUMNS FROM game_servers LIKE '$col'")->fetch();
+            if (!$colCheck) {
+                $pdo->query("ALTER TABLE game_servers ADD COLUMN $col $def");
+            }
+        } catch (Exception $e) { /* ignore */ }
     }
+
+    // Insertion (server_name = nom du salon, host_pseudo = pseudo hôte, game_type)
+    $stmt = $pdo->prepare("INSERT INTO game_servers (server_name, ip_address, local_ip, port, game_type, host_pseudo) VALUES (?, ?, ?, ?, ?, ?)");
+    $stmt->execute([$name, $ip, $local_ip ?: null, $port, $game_type, $host_pseudo]);
 
     echo json_encode(["success" => true, "id" => $pdo->lastInsertId()]);
 
@@ -106,12 +134,22 @@ if ($action === 'host') {
     // ════════════════════════════════════════════════════════
     
     // 1. Nettoyage automatique : Supprimer les serveurs vieux de > 2 minutes
-    // (L'application C# devra "pinger" ou recréer l'entrée régulièrement, ou juste suppression au timeout)
     $pdo->query("DELETE FROM game_servers WHERE last_ping < (NOW() - INTERVAL 2 MINUTE)");
 
-    // 2. Récupérer la liste
-    $stmt = $pdo->query("SELECT id, server_name, ip_address, COALESCE(local_ip, '') as local_ip, port FROM game_servers ORDER BY created_at DESC LIMIT 50");
-    $servers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    // 2. Récupérer la liste (game_type et host_pseudo pour affichage)
+    try {
+        $stmt = $pdo->query("SELECT id, server_name, ip_address, COALESCE(local_ip, '') AS local_ip, port, COALESCE(game_type, 'any') AS game_type, COALESCE(host_pseudo, server_name) AS host_pseudo FROM game_servers ORDER BY created_at DESC LIMIT 50");
+        $servers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        // Ancienne BDD sans game_type/host_pseudo
+        $stmt = $pdo->query("SELECT id, server_name, ip_address, COALESCE(local_ip, '') AS local_ip, port FROM game_servers ORDER BY created_at DESC LIMIT 50");
+        $servers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($servers as &$row) {
+            $row['game_type']   = 'any';
+            $row['host_pseudo'] = isset($row['server_name']) ? $row['server_name'] : '?';
+        }
+        unset($row);
+    }
 
     echo json_encode($servers);
 
@@ -132,7 +170,82 @@ if ($action === 'host') {
 
     echo json_encode(["success" => true]);
 
+} elseif ($action === 'lb_record_win') {
+    // ════════════════════════════════════════════════════════
+    //  LEADERBOARD: RECORD WIN
+    // ════════════════════════════════════════════════════════
+    ensure_leaderboard_table($pdo);
+    if (!isset($input['pseudo'], $input['game_type'])) {
+        echo json_encode(["error" => "Donnees manquantes (pseudo, game_type)"]);
+        exit;
+    }
+    $pseudo = substr(trim(strip_tags($input['pseudo'])), 0, 32);
+    $game   = substr(trim(strip_tags($input['game_type'])), 0, 32);
+    if ($pseudo === "" || $game === "") { echo json_encode(["error" => "Pseudo/Jeu invalide"]); exit; }
+
+    $stmt = $pdo->prepare("
+        INSERT INTO leaderboard_stats (pseudo, game_type, wins, best_score)
+        VALUES (?, ?, 1, 0)
+        ON DUPLICATE KEY UPDATE wins = wins + 1
+    ");
+    $stmt->execute([$pseudo, $game]);
+    echo json_encode(["success" => true]);
+
+} elseif ($action === 'lb_record_snake') {
+    // ════════════════════════════════════════════════════════
+    //  LEADERBOARD: RECORD SNAKE BEST SCORE
+    // ════════════════════════════════════════════════════════
+    ensure_leaderboard_table($pdo);
+    if (!isset($input['pseudo'], $input['score'])) {
+        echo json_encode(["error" => "Donnees manquantes (pseudo, score)"]);
+        exit;
+    }
+    $pseudo = substr(trim(strip_tags($input['pseudo'])), 0, 32);
+    $score  = intval($input['score']);
+    if ($pseudo === "" || $score <= 0) { echo json_encode(["error" => "Pseudo/Score invalide"]); exit; }
+
+    $stmt = $pdo->prepare("
+        INSERT INTO leaderboard_stats (pseudo, game_type, wins, best_score)
+        VALUES (?, 'Snake', 0, ?)
+        ON DUPLICATE KEY UPDATE best_score = GREATEST(best_score, VALUES(best_score))
+    ");
+    $stmt->execute([$pseudo, $score]);
+    echo json_encode(["success" => true]);
+
+} elseif ($action === 'lb_list') {
+    // ════════════════════════════════════════════════════════
+    //  LEADERBOARD: LIST
+    // ════════════════════════════════════════════════════════
+    ensure_leaderboard_table($pdo);
+    $game = $_GET['game_type'] ?? '';
+    if ($game) {
+        $game = substr(trim(strip_tags($game)), 0, 32);
+        if ($game === "Snake") {
+            $stmt = $pdo->prepare("SELECT pseudo, best_score AS value FROM leaderboard_stats WHERE game_type='Snake' ORDER BY best_score DESC, updated_at DESC LIMIT 50");
+            $stmt->execute();
+        } else {
+            $stmt = $pdo->prepare("SELECT pseudo, wins AS value FROM leaderboard_stats WHERE game_type=? ORDER BY wins DESC, updated_at DESC LIMIT 50");
+            $stmt->execute([$game]);
+        }
+        echo json_encode(["game_type" => $game, "items" => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
+        exit;
+    }
+
+    // Global: top 10 par jeu
+    $games = ["Puissance4", "Dames", "MortPion", "BlackJack", "Poker", "Snake"];
+    $out = [];
+    foreach ($games as $g) {
+        if ($g === "Snake") {
+            $stmt = $pdo->query("SELECT pseudo, best_score AS value FROM leaderboard_stats WHERE game_type='Snake' ORDER BY best_score DESC, updated_at DESC LIMIT 10");
+        } else {
+            $stmt = $pdo->prepare("SELECT pseudo, wins AS value FROM leaderboard_stats WHERE game_type=? ORDER BY wins DESC, updated_at DESC LIMIT 10");
+            $stmt->execute([$g]);
+        }
+        $out[$g] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+    echo json_encode($out);
+
 } else {
-    echo json_encode(["error" => "Action inconnue (host, list, remove)"]);
+    echo json_encode(["error" => "Action inconnue"]);
 }
 ?>

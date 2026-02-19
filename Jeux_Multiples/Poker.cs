@@ -1,8 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
+using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 namespace Jeux_Multiples
@@ -226,18 +227,39 @@ namespace Jeux_Multiples
         private Button _btnFold, _btnCheck, _btnCall, _btnRaise;
         private Button _btnChip10, _btnChip25, _btnChip50, _btnChipReset;
         private Label _lblRelance;   // affiche la valeur courante de _relance
+        
+        // Controls that need to be accessed for layout
+        private Panel _sep;
+        private Label _lblRelanceTitre;
 
         // ════════════════════════════════════════════════════════
         public string Joueur = "Joueur";
 
         // ════════════════════════════════════════════════════════
+        public bool IsMultiplayer { get; private set; }
+        private string _p1Name = "J1";
+        private string _p2Name = "J2";
+        private static readonly JavaScriptSerializer _json = new JavaScriptSerializer();
+
+        private class THCardDto { public int c; public int v; public bool f; }
+        private class PokerStateDto
+        {
+            public int youJetons, oppJetons, pot, smallBlind, bigBlind, miseActuelle, miseYou, miseOpp, relance;
+            public int phase;
+            public bool yourTurn;
+            public string message, sousMsg, msgOpp, handYou, handOpp;
+            public List<THCardDto> youHole, oppHole, community;
+        }
+
         public Poker(string joueur)
         {
             InitializeComponent();
             if (!string.IsNullOrWhiteSpace(joueur)) Joueur = joueur;
             Text = $"\u2660 Texas Hold'em Poker ({Joueur}) \u2665";
-            Size = new Size(1060, 760);
-            MinimumSize = new Size(1060, 760);
+            
+            // Full Screen
+            FormUtils.ApplyFullScreen(this);
+            
             BackColor = C_FOND;
             DoubleBuffered = true;
             BuildUI();
@@ -246,6 +268,20 @@ namespace Jeux_Multiples
             _message = "Bienvenue au Texas Hold'em !";
             _sousMsg = "Cliquez DEAL pour commencer.";
             SyncPhase();
+        }
+
+        public Poker(string joueur1, string joueur2, bool isMultiplayer) : this(joueur1)
+        {
+            IsMultiplayer = isMultiplayer;
+            if (isMultiplayer)
+            {
+                _p1Name = NetworkManager.Instance.IsHost ? joueur1 : joueur2;
+                _p2Name = NetworkManager.Instance.IsHost ? joueur2 : joueur1;
+                Text = $"\u2660 Texas Hold'em — {_p1Name} vs {_p2Name} \u2665";
+
+                NetworkManager.Instance.OnPacketReceived += OnPacketReceived;
+                NetworkManager.Instance.OnDisconnected += OnDisconnected;
+            }
         }
 
         public Poker() : this("Joueur") { }
@@ -260,10 +296,8 @@ namespace Jeux_Multiples
             // ─────────────────────────────────────────────────────
             // 1. BOUTONS PERSISTANTS (hors panneau bas)
             // ─────────────────────────────────────────────────────
-            _btnAccueil = BtnPersistant("\u2302  Accueil", 10, 10, 118, 34,
-                Color.FromArgb(48, 78, 48), Color.FromArgb(200, 230, 180));
-            _btnAccueil.Click += BtnAccueil_Click;
-            Controls.Add(_btnAccueil);
+            _btnAccueil = FormUtils.CreateBackButton(this, () => BtnAccueil_Click(this, EventArgs.Empty));
+            _btnAccueil.BringToFront();
 
             _btnHistorique = BtnPersistant("\u2630  Historique", Width - 152, 10, 140, 34,
                 Color.FromArgb(26, 55, 26), Color.FromArgb(175, 210, 145));
@@ -272,9 +306,10 @@ namespace Jeux_Multiples
 
             _pnlHistorique = new Panel
             {
-                Bounds = new Rectangle(Width - HIST_W - 10, 52, HIST_W, Height - 220),
+                Size = new Size(HIST_W, 0), // Height set in layout
                 BackColor = Color.FromArgb(10, 28, 10),
-                Visible = false
+                Visible = false,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right | AnchorStyles.Bottom
             };
             _pnlHistorique.Paint += PaintHistorique;
             Controls.Add(_pnlHistorique);
@@ -284,8 +319,9 @@ namespace Jeux_Multiples
             // ─────────────────────────────────────────────────────
             _pnlBas = new Panel
             {
-                Bounds = new Rectangle(0, Height - BAS_H, Width, BAS_H),
-                BackColor = Color.FromArgb(8, 22, 8)
+                BackColor = Color.FromArgb(8, 22, 8),
+                Height = BAS_H,
+                Dock = DockStyle.Bottom
             };
             _pnlBas.Paint += PaintPanneauBas;
             Controls.Add(_pnlBas);
@@ -296,7 +332,7 @@ namespace Jeux_Multiples
             // ─────────────────────────────────────────────────────
             _pnlZoneAttente = new Panel
             {
-                Bounds = new Rectangle(0, 0, Width, BAS_H),
+                Dock = DockStyle.Fill,
                 BackColor = Color.Transparent
             };
             _pnlBas.Controls.Add(_pnlZoneAttente);
@@ -306,7 +342,7 @@ namespace Jeux_Multiples
                 Text = "◎  DEAL",
                 Size = new Size(200, 76),
                 // X sera recalculé dans RecalcLayout, Y centré verticalement
-                Location = new Point((Width - 200) / 2, (BAS_H - 76) / 2),
+                Location = new Point(0, 0),
                 FlatStyle = FlatStyle.Flat,
                 ForeColor = Color.FromArgb(18, 12, 0),
                 Font = new Font("Georgia", 15, FontStyle.Bold),
@@ -322,45 +358,20 @@ namespace Jeux_Multiples
 
             // ─────────────────────────────────────────────────────
             // 4. SOUS-PANNEAU B : JEU
-            //    Layout (dans BAS_H=140px) :
-            //
-            //    y=0..9   : bande info (peinte, pas de contrôle)
-            //    y=BTN_Y  : 4 boutons action (h=BTN_H=68)
-            //    y=BTN_Y+BTN_H+4 = 104 : chips relance (h=CHIP_S=52→32) → on garde chips à y=BTN_Y
-            //
-            //    x des 4 boutons (tous BTN_W=140, gap BTN_GAP=10) :
-            //       COUCHER : x=20         → droite=160
-            //       CHECK   : x=170        → droite=310
-            //       SUIVRE  : x=320        → droite=460
-            //       RELANCER: x=470        → droite=610
-            //
-            //    Séparateur vertical : x=SEP_X=620, y=BTN_Y..BTN_Y+BTN_H
-            //
-            //    Zone relance démarre à x=REL_X=640
-            //       Label "Relance:" y=BTN_Y
-            //       Valeur relance  y=BTN_Y+18
-            //       Chips +10 +25 +50 ↺ : y=BTN_Y+38, taille 36×36
-            //          x=640, 684, 728, 772  → droite=808 < 1060 ✓
             // ─────────────────────────────────────────────────────
             _pnlZoneJeu = new Panel
             {
-                Bounds = new Rectangle(0, 0, Width, BAS_H),
+                Dock = DockStyle.Fill,
                 BackColor = Color.Transparent,
                 Visible = false
             };
             _pnlBas.Controls.Add(_pnlZoneJeu);
 
             // ── 4 boutons action ──────────────────────────────────
-            int bx = 20;
-
-            _btnFold = BtnAction("\u2716 COUCHER", bx, BTN_Y, BTN_W, BTN_H, Color.FromArgb(178, 34, 34), Color.White);
-            bx += BTN_W + BTN_GAP;
-            _btnCheck = BtnAction("\u2714 CHECK", bx, BTN_Y, BTN_W, BTN_H, Color.FromArgb(32, 152, 58), Color.Black);
-            bx += BTN_W + BTN_GAP;
-            _btnCall = BtnAction("\u25cf SUIVRE", bx, BTN_Y, BTN_W, BTN_H, Color.FromArgb(38, 112, 208), Color.White);
-            bx += BTN_W + BTN_GAP;
-            _btnRaise = BtnAction("\u25b2 RELANCER", bx, BTN_Y, BTN_W, BTN_H, Color.FromArgb(190, 130, 14), Color.Black);
-            // bx après : 470+140 = 610  → SEP_X=620 ✓ pas de chevauchement
+            _btnFold = BtnAction("\u2716 COUCHER", 0, 0, BTN_W, BTN_H, Color.FromArgb(178, 34, 34), Color.White);
+            _btnCheck = BtnAction("\u2714 CHECK", 0, 0, BTN_W, BTN_H, Color.FromArgb(32, 152, 58), Color.Black);
+            _btnCall = BtnAction("\u25cf SUIVRE", 0, 0, BTN_W, BTN_H, Color.FromArgb(38, 112, 208), Color.White);
+            _btnRaise = BtnAction("\u25b2 RELANCER", 0, 0, BTN_W, BTN_H, Color.FromArgb(190, 130, 14), Color.Black);
 
             _btnFold.Click += (_, __) => ActionFold();
             _btnCheck.Click += (_, __) => ActionCheck();
@@ -371,24 +382,23 @@ namespace Jeux_Multiples
                 _pnlZoneJeu.Controls.Add(b);
 
             // ── Séparateur visuel ─────────────────────────────────
-            var sep = new Panel
+            _sep = new Panel
             {
-                Bounds = new Rectangle(SEP_X, BTN_Y + 4, 1, BTN_H - 8),
+                Size = new Size(1, BTN_H - 8),
                 BackColor = Color.FromArgb(55, 255, 255, 255)
             };
-            _pnlZoneJeu.Controls.Add(sep);
+            _pnlZoneJeu.Controls.Add(_sep);
 
             // ── Zone relance ──────────────────────────────────────
             //    Titre
-            var lblTitre = new Label
+            _lblRelanceTitre = new Label
             {
                 Text = "Relance",
                 ForeColor = Color.FromArgb(170, C_OR),
                 Font = new Font("Segoe UI", 8, FontStyle.Bold),
-                Location = new Point(REL_X, BTN_Y + 2),
                 AutoSize = true
             };
-            _pnlZoneJeu.Controls.Add(lblTitre);
+            _pnlZoneJeu.Controls.Add(_lblRelanceTitre);
 
             //    Valeur courante (mise en valeur)
             _lblRelance = new Label
@@ -396,22 +406,18 @@ namespace Jeux_Multiples
                 Text = "20",
                 ForeColor = C_OR,
                 Font = new Font("Georgia", 16, FontStyle.Bold),
-                Location = new Point(REL_X, BTN_Y + 18),
                 Size = new Size(68, 30),
                 TextAlign = ContentAlignment.MiddleLeft
             };
             _pnlZoneJeu.Controls.Add(_lblRelance);
 
             //    Chips : taille 36×36, gap=8, départ x=REL_X+72
-            int chipX = REL_X + 72;
-            int chipY = BTN_Y + 12;          // centré verticalement dans BTN_H
             int chipSz = 44;
-
-            _btnChip10 = MkChip("+10", chipX, chipY, chipSz, Color.FromArgb(178, 40, 40));
-            _btnChip25 = MkChip("+25", chipX + 52, chipY, chipSz, Color.FromArgb(40, 65, 178));
-            _btnChip50 = MkChip("+50", chipX + 104, chipY, chipSz, Color.FromArgb(145, 92, 8));
-            _btnChipReset = MkChip("\u21ba", chipX + 156, chipY, chipSz, Color.FromArgb(55, 55, 55));
-            // droite = REL_X+72+156+44 = 640+72+200 = 912 < 1060 ✓
+            _btnChip10 = MkChip("+10", 0, 0, chipSz, Color.FromArgb(178, 40, 40));
+            _btnChip25 = MkChip("+25", 0, 0, chipSz, Color.FromArgb(40, 65, 178));
+            _btnChip50 = MkChip("+50", 0, 0, chipSz, Color.FromArgb(145, 92, 8));
+            _btnChipReset = MkChip("\u21ba", 0, 0, chipSz, Color.FromArgb(55, 55, 55));
+            
 
             _btnChip10.Click += (_, __) => ModifierRelance(+10);
             _btnChip25.Click += (_, __) => ModifierRelance(+25);
@@ -427,15 +433,59 @@ namespace Jeux_Multiples
 
         private void RecalcLayout()
         {
-            _pnlBas.Width = Width;
-            _pnlBas.Top = Height - BAS_H;
-            _pnlZoneAttente.Width = Width;
-            _pnlZoneJeu.Width = Width;
+            _pnlBas.Height = BAS_H; // Docked bottom
             _btnHistorique.Left = Width - 152;
             _pnlHistorique.Left = Width - HIST_W - 10;
             _pnlHistorique.Height = Height - 220;
+            
             // Recentrer le DEAL
-            _btnDeal.Location = new Point((Width - 200) / 2, (BAS_H - 76) / 2);
+            FormUtils.CenterControlHorizontally(_btnDeal, _pnlZoneAttente, (BAS_H - 76) / 2);
+
+            // Center Action Buttons in _pnlZoneJeu
+            int numBtns = 4;
+            int totalBtnW = numBtns * BTN_W + (numBtns - 1) * BTN_GAP;
+            // Add Separator + Relance Section Width
+            // Relance Section: Label (70) + Chips (4 * 44 + 3*8 + gap)
+            int chipSz = 44, chipGap = 8;
+            int chipsW = 4 * chipSz + 3 * chipGap; // 176 + 24 = 200
+            int relanceW = 70 + chipsW + 20; // Approx
+            
+            int totalGroupW = totalBtnW + 20 + 1 + 20 + relanceW;
+            
+            // Actually let's just center the whole block:
+            // [Actions] | [Relance]
+            // Fixed widths:
+            // Actions: 4 * 140 + 30 = 590
+            // Sep: 20 padding + 1 + 20 padding = 41
+            // Relance: Approx 300?
+            // Chips start at REL_X + 72 relative to start of Relance?
+            
+            int startX = (Width - 950) / 2; // Approx 950 total width
+            if (startX < 20) startX = 20;
+            
+            int bx = startX;
+            _btnFold.Location = new Point(bx, BTN_Y); bx += BTN_W + BTN_GAP;
+            _btnCheck.Location = new Point(bx, BTN_Y); bx += BTN_W + BTN_GAP;
+            _btnCall.Location = new Point(bx, BTN_Y); bx += BTN_W + BTN_GAP;
+            _btnRaise.Location = new Point(bx, BTN_Y); bx += BTN_W + BTN_GAP; // 610 relative to startX
+            
+            // Separator
+            _sep.Location = new Point(bx, BTN_Y + 4); 
+            bx += 20;
+            
+            // Relance
+            int relX = bx;
+            _lblRelanceTitre.Location = new Point(relX, BTN_Y + 2);
+            _lblRelance.Location = new Point(relX, BTN_Y + 18);
+            
+            int chipX = relX + 72;
+            int chipY = BTN_Y + 12;
+            
+            _btnChip10.Location = new Point(chipX, chipY);
+            _btnChip25.Location = new Point(chipX + 1*(chipSz + chipGap), chipY);
+            _btnChip50.Location = new Point(chipX + 2*(chipSz + chipGap), chipY);
+            _btnChipReset.Location = new Point(chipX + 3*(chipSz + chipGap), chipY);
+
             Invalidate();
             _pnlHistorique.Invalidate();
         }
@@ -545,8 +595,215 @@ namespace Jeux_Multiples
             try { Beep(880, 45); } catch { }
         }
 
+        private static List<THCardDto> ToDto(List<THCarte> hand)
+        {
+            var list = new List<THCardDto>();
+            foreach (var c in hand)
+                list.Add(new THCardDto { c = (int)c.Couleur, v = (int)c.Valeur, f = c.FaceVisible });
+            return list;
+        }
+        private static List<THCarte> FromDto(List<THCardDto> list)
+        {
+            var hand = new List<THCarte>();
+            if (list == null) return hand;
+            foreach (var d in list)
+            {
+                var c = new THCarte((THCouleur)d.c, (THValeur)d.v) { FaceVisible = d.f };
+                hand.Add(c);
+            }
+            return hand;
+        }
+
+        private void SendStateToClient()
+        {
+            if (!IsMultiplayer || !NetworkManager.Instance.IsHost || !NetworkManager.Instance.IsConnected) return;
+            try
+            {
+                bool showdown = _phase == THPhase.Showdown;
+                var dto = new PokerStateDto
+                {
+                    // Vue client: "you" = adversaire (IA dans l'état du host)
+                    youJetons = _jetonsIA,
+                    oppJetons = _jetons,
+                    pot = _pot,
+                    smallBlind = _smallBlind,
+                    bigBlind = _bigBlind,
+                    miseActuelle = _miseActuelle,
+                    miseYou = _miseIA,
+                    miseOpp = _miseJoueur,
+                    relance = _relance,
+                    phase = (int)_phase,
+                    yourTurn = _iaEnCours, // quand le host attend l'adversaire, c'est le tour du client
+                    message = _message,
+                    sousMsg = _sousMsg,
+                    msgOpp = _msgIA,
+                    handYou = _handIA,
+                    handOpp = _handJoueur,
+                    youHole = ToDto(_holeIA),
+                    oppHole = ToDto(_holeJoueur),
+                    community = ToDto(_community),
+                };
+
+                // Ne pas révéler les cartes host tant que pas showdown
+                if (!showdown)
+                {
+                    foreach (var c in dto.oppHole) c.f = false;
+                }
+                // Le client voit toujours ses cartes
+                foreach (var c in dto.youHole) c.f = true;
+
+                NetworkManager.Instance.SendPacket(new Packet("POKER_STATE", NetworkManager.Instance.MyPseudo, _json.Serialize(dto)));
+            }
+            catch { }
+        }
+
+        private void OnDisconnected()
+        {
+            if (this.IsDisposed || !this.IsHandleCreated) return;
+            this.BeginInvoke(new Action(() =>
+            {
+                if (this.IsDisposed) return;
+                // En ligne: retour direct à l'accueil, sans notification.
+                try { NetworkManager.Instance.Disconnect(); } catch { }
+                try
+                {
+                    var acc = new Accueil();
+                    acc.Show();
+                }
+                catch { }
+                this.Close();
+            }));
+        }
+
+        private void OnPacketReceived(Packet p)
+        {
+            if (!IsMultiplayer) return;
+            if (this.IsDisposed || !this.IsHandleCreated) return;
+
+            if (p.Type == "POKER_REQ_DEAL" && NetworkManager.Instance.IsHost)
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed) return;
+                    Distribuer();
+                    SendStateToClient();
+                }));
+            }
+            else if (p.Type == "POKER_ACT" && NetworkManager.Instance.IsHost)
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed) return;
+                    // Action de l'adversaire (remplace l'IA)
+                    if (!_iaEnCours) return;
+
+                    string[] parts = (p.Content ?? "").Split('|');
+                    string act = parts.Length > 0 ? parts[0] : "";
+                    int amount = 0;
+                    if (parts.Length > 1) int.TryParse(parts[1], out amount);
+
+                    bool doit = _miseActuelle > _miseIA;
+                    IAAction action;
+                    if (act == "FOLD") action = IAAction.Fold;
+                    else if (act == "CALL") action = IAAction.Call;
+                    else if (act == "RAISE") action = IAAction.Raise;
+                    else action = IAAction.Check;
+
+                    // Appliquer l'action sur le "joueur IA" (qui représente le client)
+                    switch (action)
+                    {
+                        case IAAction.Fold:
+                            _jetons += _pot; _pot = 0;
+                            _message = "♥ " + _p1Name + " remporte le pot ! (" + _p2Name + " se couche)";
+                            _sousMsg = "Jetons : " + _jetons;
+                            _phase = THPhase.Showdown;
+                            _victoires++; _parties++;
+                            try { _ = NetworkManager.Instance.Lobby.RecordWinAsync(_p1Name, "Poker"); } catch { }
+                            SyncPhase(); Invalidate();
+                            SendStateToClient();
+                            return;
+
+                        case IAAction.Call:
+                            int cm = Math.Min(_miseActuelle - _miseIA, _jetonsIA);
+                            _jetonsIA -= cm; _miseIA += cm; _pot += cm;
+                            _msgIA = "● " + _p2Name + " suit (+" + cm + ").";
+                            break;
+
+                        case IAAction.Raise:
+                            if (amount > 0) _relance = amount;
+                            int rm = Math.Min(_miseActuelle - _miseIA + _relance, _jetonsIA);
+                            _jetonsIA -= rm; _miseIA += rm; _pot += rm; _miseActuelle = _miseIA;
+                            _msgIA = "● " + _p2Name + " relance de " + _relance + " !";
+                            _joueurDoit = true;
+                            _iaEnCours = false;
+                            SyncPhase(); Invalidate();
+                            SendStateToClient();
+                            return;
+
+                        default:
+                            _msgIA = "● " + _p2Name + " check.";
+                            break;
+                    }
+
+                    _iaEnCours = false;
+                    PasserPhase();
+                    SendStateToClient();
+                }));
+            }
+            else if (p.Type == "POKER_STATE" && !NetworkManager.Instance.IsHost)
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed) return;
+                    try
+                    {
+                        var dto = _json.Deserialize<PokerStateDto>(p.Content);
+                        if (dto == null) return;
+
+                        _jetons = dto.youJetons;
+                        _jetonsIA = dto.oppJetons;
+                        _pot = dto.pot;
+                        _smallBlind = dto.smallBlind;
+                        _bigBlind = dto.bigBlind;
+                        _miseActuelle = dto.miseActuelle;
+                        _miseJoueur = dto.miseYou;
+                        _miseIA = dto.miseOpp;
+                        _relance = dto.relance;
+                        _phase = (THPhase)dto.phase;
+
+                        _message = dto.message ?? "";
+                        _sousMsg = dto.sousMsg ?? "";
+                        _msgIA = dto.msgOpp ?? "";
+                        _handJoueur = dto.handYou ?? "";
+                        _handIA = dto.handOpp ?? "";
+
+                        _holeJoueur = FromDto(dto.youHole);
+                        _holeIA = FromDto(dto.oppHole);
+                        _community = FromDto(dto.community);
+
+                        _joueurDoit = dto.yourTurn;
+                        _iaEnCours = !_joueurDoit && _phase != THPhase.Attente && _phase != THPhase.Showdown;
+
+                        _lblRelance.Text = _relance.ToString();
+                        _btnRaise.Text = "\u25b2 RELANCER\n(+" + _relance + ")";
+
+                        SyncPhase(); Invalidate();
+                    }
+                    catch { }
+                }));
+            }
+        }
+
         private void Distribuer()
         {
+            if (IsMultiplayer && !NetworkManager.Instance.IsHost)
+            {
+                NetworkManager.Instance.SendPacket(new Packet("POKER_REQ_DEAL", NetworkManager.Instance.MyPseudo, ""));
+                _message = "Demande envoyée…";
+                Invalidate();
+                return;
+            }
+
             if (_jetons < _bigBlind || _jetonsIA < _bigBlind) { _message = "Pas assez de jetons !"; Invalidate(); return; }
             _paquet = new THPaquet(); _paquet.Melanger();
             _holeJoueur.Clear(); _holeIA.Clear(); _community.Clear();
@@ -566,6 +823,7 @@ namespace Jeux_Multiples
             _handJoueur = EvalMain(_holeJoueur, _community);
             try { Beep(660, 80); Beep(880, 80); } catch { }
             SyncPhase(); Invalidate();
+            if (IsMultiplayer && NetworkManager.Instance.IsHost) SendStateToClient();
         }
 
         private void PrendreBlinde(ref int j, ref int m, int v) { int n = Math.Min(v, j); j -= n; m += n; }
@@ -573,12 +831,22 @@ namespace Jeux_Multiples
         private void ActionCheck()
         {
             if (!_joueurDoit) return;
+            if (IsMultiplayer && !NetworkManager.Instance.IsHost)
+            {
+                NetworkManager.Instance.SendPacket(new Packet("POKER_ACT", NetworkManager.Instance.MyPseudo, "CHECK|0"));
+                return;
+            }
             _joueurDoit = false; _msgIA = "\u25a0 Vous checkez.";
             SyncPhase(); LancerIA();
         }
         private void ActionCall()
         {
             if (!_joueurDoit) return;
+            if (IsMultiplayer && !NetworkManager.Instance.IsHost)
+            {
+                NetworkManager.Instance.SendPacket(new Packet("POKER_ACT", NetworkManager.Instance.MyPseudo, "CALL|0"));
+                return;
+            }
             int n = Math.Min(_miseActuelle - _miseJoueur, _jetons);
             _jetons -= n; _miseJoueur += n; _pot += n;
             _joueurDoit = false; _msgIA = "\u25a0 Vous suivez (+" + n + ").";
@@ -588,6 +856,11 @@ namespace Jeux_Multiples
         private void ActionRaise()
         {
             if (!_joueurDoit) return;
+            if (IsMultiplayer && !NetworkManager.Instance.IsHost)
+            {
+                NetworkManager.Instance.SendPacket(new Packet("POKER_ACT", NetworkManager.Instance.MyPseudo, "RAISE|" + _relance));
+                return;
+            }
             int total = Math.Min(_miseActuelle - _miseJoueur + _relance, _jetons);
             _jetons -= total; _miseJoueur += total; _pot += total; _miseActuelle = _miseJoueur;
             _joueurDoit = false; _msgIA = "\u25a0 Vous relancez de " + _relance + "."; _relance = _bigBlind;
@@ -597,6 +870,11 @@ namespace Jeux_Multiples
         private void ActionFold()
         {
             if (!_joueurDoit) return;
+            if (IsMultiplayer && !NetworkManager.Instance.IsHost)
+            {
+                NetworkManager.Instance.SendPacket(new Packet("POKER_ACT", NetworkManager.Instance.MyPseudo, "FOLD|0"));
+                return;
+            }
             _joueurDoit = false; _jetonsIA += _pot; _pot = 0;
             _message = "\u2639 Vous vous couchez. L'IA remporte le pot !";
             _sousMsg = "Jetons : " + _jetons;
@@ -604,13 +882,33 @@ namespace Jeux_Multiples
             EnregistrerPartie("Couché", _miseJoueur, -_miseJoueur);
             try { Beep(300, 200); Beep(220, 300); } catch { }
             SyncPhase(); Invalidate();
+            if (IsMultiplayer && NetworkManager.Instance.IsHost)
+            {
+                try { _ = NetworkManager.Instance.Lobby.RecordWinAsync(_p2Name, "Poker"); } catch { }
+                SendStateToClient();
+            }
         }
 
-        private void LancerIA() { _iaEnCours = true; _timerIA.Start(); }
-        private void TimerIA_Tick(object sender, EventArgs e) { _timerIA.Stop(); _iaEnCours = false; IAJouer(); }
+        private void LancerIA()
+        {
+            if (IsMultiplayer)
+            {
+                _iaEnCours = true; // tour adversaire
+                SendStateToClient();
+                return;
+            }
+            _iaEnCours = true; _timerIA.Start();
+        }
+
+        private void TimerIA_Tick(object sender, EventArgs e)
+        {
+            if (IsMultiplayer) return;
+            _timerIA.Stop(); _iaEnCours = false; IAJouer();
+        }
 
         private void IAJouer()
         {
+            if (IsMultiplayer) return;
             var allIA = new List<THCarte>(_holeIA); allIA.AddRange(_community);
             foreach (var c in _holeIA) c.FaceVisible = true;
             var eval = THEvaluateur.MeilleureDe(allIA);
@@ -702,15 +1000,17 @@ namespace Jeux_Multiples
             if (eJ.Score > eI.Score)
             {
                 _jetons += _pot; _pot = 0;
-                _message = "\u265a VOUS GAGNEZ !  " + eJ.Description; _sousMsg = "Jetons : " + _jetons;
+                _message = "\u265a " + (IsMultiplayer ? _p1Name : "VOUS") + " GAGNE !  " + eJ.Description; _sousMsg = "Jetons : " + _jetons;
                 _victoires++; _parties++; EnregistrerPartie("Gagné", _miseJoueur, _pot);
+                if (IsMultiplayer) { try { _ = NetworkManager.Instance.Lobby.RecordWinAsync(_p1Name, "Poker"); } catch { } }
                 try { Beep(880, 90); Beep(1100, 140); Beep(1320, 200); } catch { }
             }
             else if (eI.Score > eJ.Score)
             {
                 _jetonsIA += _pot; _pot = 0;
-                _message = "\u2639 L'IA gagne !  " + eI.Description; _sousMsg = "Jetons : " + _jetons;
+                _message = "\u2639 " + (IsMultiplayer ? _p2Name : "L'IA") + " gagne !  " + eI.Description; _sousMsg = "Jetons : " + _jetons;
                 _defaites++; _parties++; EnregistrerPartie("Perdu", _miseJoueur, -_miseJoueur);
+                if (IsMultiplayer) { try { _ = NetworkManager.Instance.Lobby.RecordWinAsync(_p2Name, "Poker"); } catch { } }
                 try { Beep(300, 190); Beep(220, 280); } catch { }
             }
             else
@@ -722,6 +1022,7 @@ namespace Jeux_Multiples
             if (_jetons <= 0) { _message = "\u26a0 GAME OVER !"; _jetons = 1000; _sousMsg = "Nouveau départ : 1000 j."; }
             if (_jetonsIA <= 0) { _message = "\u2665 L'IA est ruinée !"; _jetonsIA = 1000; }
             SyncPhase(); Invalidate();
+            if (IsMultiplayer && NetworkManager.Instance.IsHost) SendStateToClient();
         }
 
         private string EvalMain(List<THCarte> h, List<THCarte> c)
@@ -742,6 +1043,16 @@ namespace Jeux_Multiples
             _timerIA.Stop();
             try { var a = new Accueil(); a.Show(); this.Close(); }
             catch { MessageBox.Show("Impossible d'ouvrir Accueil.", "Erreur", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (IsMultiplayer)
+            {
+                NetworkManager.Instance.OnPacketReceived -= OnPacketReceived;
+                NetworkManager.Instance.OnDisconnected -= OnDisconnected;
+            }
+            base.OnFormClosing(e);
         }
         #endregion
 

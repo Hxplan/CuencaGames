@@ -1,8 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
+using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 namespace Jeux_Multiples
@@ -175,6 +176,7 @@ namespace Jeux_Multiples
         private bool _joueurSurMain2 = false;
         private int _miseMain2 = 0;
         private int _jetons = 1000;
+        private int _jetons2 = 1000; // Multi: jetons du joueur 2 (main 2)
         private int _mise = 0;
         private string _message = "";
         private string _sousMessage = "";
@@ -221,13 +223,152 @@ namespace Jeux_Multiples
         public string Joueur = "Joueur";
 
         // ════════════════════════════════════════════════════════
+        public bool IsMultiplayer { get; private set; }
+
+        private string _p1Name = "J1";
+        private string _p2Name = "J2";
+
+        private static readonly JavaScriptSerializer _json = new JavaScriptSerializer();
+
+        private class BJCardDto { public int c; public int v; public bool f; }
+        private class BJStateDto
+        {
+            public int j1, j2, m1, m2;
+            public bool en, att, t2;
+            public string msg, sub;
+            public List<BJCardDto> p1, p2, cr;
+        }
+
+        private bool _allowRemoteAction = false;
+
+        private bool IsMyTurn()
+        {
+            if (!IsMultiplayer) return true;
+            return NetworkManager.Instance.IsHost ? !_joueurSurMain2 : _joueurSurMain2;
+        }
+
+        private static List<BJCardDto> ToDto(List<BJCarte> hand)
+        {
+            var list = new List<BJCardDto>();
+            foreach (var c in hand)
+                list.Add(new BJCardDto { c = (int)c.Couleur, v = c.Valeur, f = c.FaceVisible });
+            return list;
+        }
+
+        private static List<BJCarte> FromDto(List<BJCardDto> list)
+        {
+            var hand = new List<BJCarte>();
+            if (list == null) return hand;
+            foreach (var d in list)
+            {
+                var c = new BJCarte((BJCouleur)d.c, d.v) { FaceVisible = d.f, Animating = false };
+                hand.Add(c);
+            }
+            return hand;
+        }
+
+        private void SendStateToClient()
+        {
+            if (!IsMultiplayer || !NetworkManager.Instance.IsHost || !NetworkManager.Instance.IsConnected) return;
+            try
+            {
+                var dto = new BJStateDto
+                {
+                    j1 = _jetons, j2 = _jetons2,
+                    m1 = _mise, m2 = _miseMain2,
+                    en = _enCours, att = _attenteMise, t2 = _joueurSurMain2,
+                    msg = _message, sub = _sousMessage,
+                    p1 = ToDto(_mainJoueur),
+                    p2 = ToDto(_mainJoueur2),
+                    cr = ToDto(_mainCroupier),
+                };
+                NetworkManager.Instance.SendPacket(new Packet("BJ_STATE", NetworkManager.Instance.MyPseudo, _json.Serialize(dto)));
+            }
+            catch { }
+        }
+
+        private void OnDisconnected()
+        {
+            if (this.IsDisposed || !this.IsHandleCreated) return;
+            this.BeginInvoke(new Action(() =>
+            {
+                if (this.IsDisposed) return;
+                // En ligne: retour direct à l'accueil, sans notification.
+                try { NetworkManager.Instance.Disconnect(); } catch { }
+                try
+                {
+                    var acc = new Accueil();
+                    acc.Show();
+                }
+                catch { }
+                this.Close();
+            }));
+        }
+
+        private void OnPacketReceived(Packet p)
+        {
+            if (!IsMultiplayer) return;
+            if (this.IsDisposed || !this.IsHandleCreated) return;
+
+            if (p.Type == "BJ_REQ_DEAL" && NetworkManager.Instance.IsHost)
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed) return;
+                    DistribuerMulti();
+                }));
+            }
+            else if (p.Type == "BJ_ACT" && NetworkManager.Instance.IsHost)
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed) return;
+                    _allowRemoteAction = true;
+                    try
+                    {
+                        if (p.Content == "HIT") Tirer();
+                        else if (p.Content == "STAND") Rester();
+                        else if (p.Content == "DOUBLE") Doubler();
+                    }
+                    finally { _allowRemoteAction = false; }
+                }));
+            }
+            else if (p.Type == "BJ_STATE" && !NetworkManager.Instance.IsHost)
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed) return;
+                    try
+                    {
+                        var dto = _json.Deserialize<BJStateDto>(p.Content);
+                        if (dto == null) return;
+                        _jetons = dto.j1; _jetons2 = dto.j2;
+                        _mise = dto.m1; _miseMain2 = dto.m2;
+                        _enCours = dto.en; _attenteMise = dto.att; _joueurSurMain2 = dto.t2;
+                        _message = dto.msg ?? ""; _sousMessage = dto.sub ?? "";
+                        _mainJoueur = FromDto(dto.p1);
+                        _mainJoueur2 = FromDto(dto.p2);
+                        _mainCroupier = FromDto(dto.cr);
+                        _splitActif = true;
+                        _peutAssurance = false;
+
+                        if (_attenteMise) AfficherPhase(Phase.Mise);
+                        else if (_enCours) AfficherPhase(Phase.Jeu);
+                        else AfficherPhase(Phase.Fin);
+                        Invalidate();
+                    }
+                    catch { }
+                }));
+            }
+        }
+
         public BlackJack(string joueur)
         {
             InitializeComponent();
             if (!string.IsNullOrWhiteSpace(joueur)) Joueur = joueur;
             Text = $"\u2660 BlackJack Pro ({Joueur}) \u2665";
-            Size = new Size(1060, 760);
-            MinimumSize = new Size(1060, 760);
+            FormUtils.ApplyFullScreen(this);
+            
             BackColor = C_FOND;
             DoubleBuffered = true;
             BuildUI();
@@ -235,6 +376,27 @@ namespace Jeux_Multiples
             _message = "Placez votre mise pour commencer !";
             _sousMessage = "Jetons disponibles : " + _jetons;
             AfficherPhase(Phase.Mise);
+        }
+
+        public BlackJack(string joueur1, string joueur2, bool isMultiplayer) : this(joueur1)
+        {
+            IsMultiplayer = isMultiplayer;
+            if (isMultiplayer)
+            {
+                // P1 = Host, P2 = Client (mapping stable)
+                _p1Name = NetworkManager.Instance.IsHost ? joueur1 : joueur2;
+                _p2Name = NetworkManager.Instance.IsHost ? joueur2 : joueur1;
+
+                Text = $"\u2660 BlackJack — {_p1Name} vs {_p2Name} \u2665";
+                NetworkManager.Instance.OnPacketReceived += OnPacketReceived;
+                NetworkManager.Instance.OnDisconnected += OnDisconnected;
+                // En multi on réutilise l'UI split pour afficher 2 joueurs
+                _splitActif = true;
+                _peutAssurance = false;
+                if (_btnSplit != null) _btnSplit.Visible = false;
+                if (_btnAssurance != null) _btnAssurance.Visible = false;
+                if (_btnRefuserAssurance != null) _btnRefuserAssurance.Visible = false;
+            }
         }
 
         public BlackJack() : this("Joueur") { }
@@ -250,8 +412,9 @@ namespace Jeux_Multiples
             // ── Fond bas ──────────────────────────────────────────
             _pnlBas = new Panel
             {
-                Bounds = new Rectangle(0, Height - BAS_H, Width, BAS_H),
-                BackColor = Color.FromArgb(8, 20, 8)
+                BackColor = Color.FromArgb(8, 20, 8),
+                Height = BAS_H,
+                Dock = DockStyle.Bottom
             };
             _pnlBas.Paint += PaintPanneauBas;
             Controls.Add(_pnlBas);
@@ -259,19 +422,18 @@ namespace Jeux_Multiples
             // ── Zone mise (chips + deal) ──────────────────────────
             _pnlMiseZone = new Panel
             {
-                Bounds = new Rectangle(0, 0, Width, BAS_H),
+                Dock = DockStyle.Fill,
                 BackColor = Color.Transparent
             };
             _pnlBas.Controls.Add(_pnlMiseZone);
 
-            // Chips dans la zone mise
-            int bx = 20;
-            _btnMise10 = CreerChip("+10", bx, 48, Color.FromArgb(185, 45, 45)); bx += 76;
-            _btnMise25 = CreerChip("+25", bx, 48, Color.FromArgb(45, 75, 185)); bx += 76;
-            _btnMise50 = CreerChip("+50", bx, 48, Color.FromArgb(155, 100, 10)); bx += 76;
-            _btnMise100 = CreerChip("+100", bx, 48, Color.FromArgb(45, 130, 50)); bx += 76;
-            _btnMise200 = CreerChip("+200", bx, 48, Color.FromArgb(135, 55, 195)); bx += 76;
-            _btnEffacer = CreerChip("\u232b Effacer", bx, 48, Color.FromArgb(80, 30, 30));
+            // Chips
+            _btnMise10 = CreerChip("+10", 0, 0, Color.FromArgb(185, 45, 45));
+            _btnMise25 = CreerChip("+25", 0, 0, Color.FromArgb(45, 75, 185));
+            _btnMise50 = CreerChip("+50", 0, 0, Color.FromArgb(155, 100, 10));
+            _btnMise100 = CreerChip("+100", 0, 0, Color.FromArgb(45, 130, 50));
+            _btnMise200 = CreerChip("+200", 0, 0, Color.FromArgb(135, 55, 195));
+            _btnEffacer = CreerChip("\u232b", 0, 0, Color.FromArgb(80, 30, 30));
 
             _btnMise10.Click += (s, e) => AjouterMise(10);
             _btnMise25.Click += (s, e) => AjouterMise(25);
@@ -283,28 +445,26 @@ namespace Jeux_Multiples
             foreach (var b in new[] { _btnMise10, _btnMise25, _btnMise50, _btnMise100, _btnMise200, _btnEffacer })
                 _pnlMiseZone.Controls.Add(b);
 
-            // Bouton DEAL — bien visible à droite
-            _btnDeal = CreerBoutonAction("\u25ce  DEAL", 580, 38, 150, 68,
+            // Bouton DEAL
+            _btnDeal = CreerBoutonAction("\u25ce  DEAL", 0, 0, 150, 68,
                 Color.FromArgb(210, 170, 20), Color.Black);
             _btnDeal.Font = new Font("Georgia", 14, FontStyle.Bold);
             _btnDeal.Click += (s, e) => Distribuer();
             _pnlMiseZone.Controls.Add(_btnDeal);
 
-            // ── Zone jeu (tirer / rester / doubler / split) ───────
+            // ── Zone jeu ──────────────────────────────────────────
             _pnlJeuZone = new Panel
             {
-                Bounds = new Rectangle(0, 0, Width, BAS_H),
+                Dock = DockStyle.Fill,
                 BackColor = Color.Transparent,
                 Visible = false
             };
             _pnlBas.Controls.Add(_pnlJeuZone);
 
-            // Boutons d'action jeu — grands et contrastés
-            int gx = 20;
-            _btnTirer = CreerBoutonAction("\u25bc TIRER", gx, 40, 165, 72, Color.FromArgb(40, 185, 65), Color.Black); gx += 178;
-            _btnRester = CreerBoutonAction("\u25a0 RESTER", gx, 40, 165, 72, Color.FromArgb(205, 45, 45), Color.White); gx += 178;
-            _btnDoubler = CreerBoutonAction("\u00d72 DOUBLER", gx, 40, 165, 72, Color.FromArgb(45, 125, 220), Color.White); gx += 178;
-            _btnSplit = CreerBoutonAction("\u2194 SPLIT", gx, 40, 165, 72, Color.FromArgb(145, 60, 210), Color.White);
+            _btnTirer = CreerBoutonAction("\u25bc TIRER", 0, 0, 165, 72, Color.FromArgb(40, 185, 65), Color.Black);
+            _btnRester = CreerBoutonAction("\u25a0 RESTER", 0, 0, 165, 72, Color.FromArgb(205, 45, 45), Color.White);
+            _btnDoubler = CreerBoutonAction("\u00d72 DOUBLER", 0, 0, 165, 72, Color.FromArgb(45, 125, 220), Color.White);
+            _btnSplit = CreerBoutonAction("\u2194 SPLIT", 0, 0, 165, 72, Color.FromArgb(145, 60, 210), Color.White);
 
             _btnTirer.Font = new Font("Georgia", 13, FontStyle.Bold);
             _btnRester.Font = new Font("Georgia", 13, FontStyle.Bold);
@@ -319,47 +479,40 @@ namespace Jeux_Multiples
             foreach (var b in new[] { _btnTirer, _btnRester, _btnDoubler, _btnSplit })
                 _pnlJeuZone.Controls.Add(b);
 
-            // Boutons assurance — dans la zone jeu
-            _btnAssurance = CreerBoutonAction("\u2714 ASSURANCE", 600, 38, 165, 52,
-                Color.FromArgb(175, 145, 25), Color.Black);
-            _btnRefuserAssurance = CreerBoutonAction("\u2716 REFUSER", 775, 38, 145, 52,
-                Color.FromArgb(130, 45, 45), Color.White);
+            // Assurance
+            _btnAssurance = CreerBoutonAction("\u2714 ASSURANCE", 0, 0, 165, 52, Color.FromArgb(175, 145, 25), Color.Black);
+            _btnRefuserAssurance = CreerBoutonAction("\u2716 REFUSER", 0, 0, 145, 52, Color.FromArgb(130, 45, 45), Color.White);
             _btnAssurance.Click += (s, e) => PrendreAssurance();
             _btnRefuserAssurance.Click += (s, e) => RefuserAssurance();
-            _btnAssurance.Visible = false;
-            _btnRefuserAssurance.Visible = false;
+            _btnAssurance.Visible = false; _btnRefuserAssurance.Visible = false;
             _pnlJeuZone.Controls.Add(_btnAssurance);
             _pnlJeuZone.Controls.Add(_btnRefuserAssurance);
 
-            // Bouton Nouvelle Partie — dans zone jeu (fin de round)
-            _btnRejouer = CreerBoutonAction("\u21bb NOUVELLE PARTIE", 580, 38, 230, 72,
-                Color.FromArgb(185, 145, 30), Color.Black);
+            // Rejouer
+            _btnRejouer = CreerBoutonAction("\u21bb NOUVELLE PARTIE", 0, 0, 230, 72, Color.FromArgb(185, 145, 30), Color.Black);
             _btnRejouer.Font = new Font("Georgia", 13, FontStyle.Bold);
             _btnRejouer.Visible = false;
             _btnRejouer.Click += (s, e) => NouvellePartie();
             _pnlJeuZone.Controls.Add(_btnRejouer);
 
-            // ── Boutons persistants (toujours visibles) ───────────
-            _btnHistorique = CreerBoutonAction("\u2630 HISTORIQUE", Width - 155, 10, 138, 32,
+            // ── Boutons persistants ───────────────────────────────
+            _btnHistorique = CreerBoutonAction("\u2630 HISTORIQUE", 0, 0, 138, 32,
                 Color.FromArgb(30, 60, 30), Color.FromArgb(180, 210, 150));
             _btnHistorique.Font = F_BTN;
             _btnHistorique.Click += (s, e) => ToggleHistorique();
             Controls.Add(_btnHistorique);
 
-            _btnAccueil = CreerBoutonAction("\u2302 ACCUEIL", 10, 10, 120, 34,
-                Color.FromArgb(50, 80, 50), Color.FromArgb(200, 230, 180));
-            _btnAccueil.Font = F_BTN;
-            _btnAccueil.Click += BtnAccueil_Click;
-            Controls.Add(_btnAccueil);
+            _btnAccueil = FormUtils.CreateBackButton(this, () => BtnAccueil_Click(this, EventArgs.Empty));
             _btnAccueil.BringToFront();
             _btnHistorique.BringToFront();
 
             // ── Panneau historique ────────────────────────────────
             _pnlHistorique = new Panel
             {
-                Bounds = new Rectangle(Width - HIST_W - 10, 52, HIST_W, Height - 220),
+                Size = new Size(HIST_W, 0), // Height set in layout
                 BackColor = Color.FromArgb(10, 28, 10),
-                Visible = false
+                Visible = false,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right | AnchorStyles.Bottom
             };
             _pnlHistorique.Paint += PaintHistorique;
             Controls.Add(_pnlHistorique);
@@ -369,15 +522,50 @@ namespace Jeux_Multiples
 
         private void RecalcLayout()
         {
-            _pnlBas.Width = Width;
-            _pnlBas.Top = Height - BAS_H;
-            _pnlMiseZone.Width = Width;
-            _pnlJeuZone.Width = Width;
-            _btnHistorique.Left = Width - 155;
-            _pnlHistorique.Left = Width - HIST_W - 10;
-            _pnlHistorique.Height = Height - 220;
-            Invalidate();
-            _pnlHistorique.Invalidate();
+            // Center Chips
+            int numChips = 6; 
+            int chipSize = 66, chipGap = 10;
+            int totalChipsW = numChips * chipSize + (numChips - 1) * chipGap;
+            int startX = (Width - totalChipsW) / 2;
+            int chipY = 30;
+
+            _btnMise10.Location = new Point(startX, chipY);
+            _btnMise25.Location = new Point(startX + 1*(chipSize+chipGap), chipY);
+            _btnMise50.Location = new Point(startX + 2*(chipSize+chipGap), chipY);
+            _btnMise100.Location = new Point(startX + 3*(chipSize+chipGap), chipY);
+            _btnMise200.Location = new Point(startX + 4*(chipSize+chipGap), chipY);
+            _btnEffacer.Location = new Point(startX + 5*(chipSize+chipGap), chipY);
+
+            // Deal Button centered below chips
+            FormUtils.CenterControlHorizontally(_btnDeal, this, chipY + chipSize + 15);
+
+            // Game Actions
+            int numAct = 4;
+            int actW = 165, actGap = 15;
+            int totalActW = numAct * actW + (numAct - 1) * actGap;
+            int actX = (Width - totalActW) / 2;
+            int actY = 40;
+
+            _btnTirer.Location = new Point(actX, actY);
+            _btnRester.Location = new Point(actX + 1*(actW+actGap), actY);
+            _btnDoubler.Location = new Point(actX + 2*(actW+actGap), actY);
+            _btnSplit.Location = new Point(actX + 3*(actW+actGap), actY);
+
+            // Assurance (center approx)
+            _btnAssurance.Location = new Point(Width/2 - 170, actY);
+            _btnRefuserAssurance.Location = new Point(Width/2 + 10, actY);
+
+            // Rejouer centered
+            FormUtils.CenterControlHorizontally(_btnRejouer, this, actY);
+
+            // Top Buttons
+            _btnHistorique.Location = new Point(Width - 150, 20);
+            
+            // Historique Panel
+            _pnlHistorique.Location = new Point(Width - HIST_W - 10, 60);
+            _pnlHistorique.Height = Height - BAS_H - 70;
+
+            Invalidate(); // Redraw main graphics
         }
 
         // ── Chip ronde ────────────────────────────────────────────
@@ -565,7 +753,15 @@ namespace Jeux_Multiples
                 g.DrawString(titre, F_TITRE, brG, txP, 8);
 
             // Badges jetons et mise
-            DrawBadge(g, "\u25cf Jetons : " + _jetons, 148, 14, _jetons < 200 ? C_ROUGE : C_VERT);
+            if (IsMultiplayer)
+            {
+                DrawBadge(g, "\u25cf " + _p1Name + " : " + _jetons, 148, 14, _jetons < 200 ? C_ROUGE : C_VERT);
+                string jt2 = "\u25cf " + _p2Name + " : " + _jetons2;
+                SizeF szJ2 = g.MeasureString(jt2, F_UI);
+                DrawBadge(g, jt2, Width - szJ2.Width - 55, 14, _jetons2 < 200 ? C_ROUGE : C_VERT);
+            }
+            else
+                DrawBadge(g, "\u25cf Jetons : " + _jetons, 148, 14, _jetons < 200 ? C_ROUGE : C_VERT);
             if (_mise > 0)
             {
                 string mt = "\u25b2 Mise : " + _mise;
@@ -630,9 +826,11 @@ namespace Jeux_Multiples
                 Width / 2f - sz.Width / 2f, Height - BAS_H - 23);
         }
 
+        // Updated DrawLabel to center text
         private void DrawLabel(Graphics g, string txt, float y)
         {
-            g.DrawString(txt, F_UI_SM, new SolidBrush(Color.FromArgb(120, 255, 255, 255)), 82, y);
+             SizeF sz = g.MeasureString(txt, F_UI_SM);
+             g.DrawString(txt, F_UI_SM, new SolidBrush(Color.FromArgb(120, 255, 255, 255)), Width/2f - sz.Width/2f, y);
         }
 
         private void DrawMains(Graphics g, List<BJCarte> main, int y, bool estCroupier)
@@ -677,8 +875,16 @@ namespace Jeux_Multiples
             }
             if (_mainJoueur2.Count > 0) DrawScoreBadgeSplit(g, _mainJoueur2, x2, y, s2);
 
-            g.DrawString("MAIN 1", F_UI_SM, new SolidBrush(Color.FromArgb(120, 255, 255, 255)), x1, Height / 2 + 8);
-            g.DrawString("MAIN 2", F_UI_SM, new SolidBrush(Color.FromArgb(120, 255, 255, 255)), x2, Height / 2 + 8);
+            if (IsMultiplayer)
+            {
+                g.DrawString(_p1Name.ToUpper(), F_UI_SM, new SolidBrush(Color.FromArgb(120, 255, 255, 255)), x1, Height / 2 + 8);
+                g.DrawString(_p2Name.ToUpper(), F_UI_SM, new SolidBrush(Color.FromArgb(120, 255, 255, 255)), x2, Height / 2 + 8);
+            }
+            else
+            {
+                g.DrawString("MAIN 1", F_UI_SM, new SolidBrush(Color.FromArgb(120, 255, 255, 255)), x1, Height / 2 + 8);
+                g.DrawString("MAIN 2", F_UI_SM, new SolidBrush(Color.FromArgb(120, 255, 255, 255)), x2, Height / 2 + 8);
+            }
         }
 
         private void DrawScoreBadge(Graphics g, List<BJCarte> main, int carteY)
@@ -836,6 +1042,15 @@ namespace Jeux_Multiples
 
         private void Distribuer()
         {
+            if (IsMultiplayer)
+            {
+                if (NetworkManager.Instance.IsHost) { DistribuerMulti(); return; }
+                NetworkManager.Instance.SendPacket(new Packet("BJ_REQ_DEAL", NetworkManager.Instance.MyPseudo, ""));
+                _message = "Demande envoyée…";
+                Invalidate();
+                return;
+            }
+
             if (_mise <= 0)
             { _message = "Placez une mise d'abord !"; SonErreur(); Invalidate(); return; }
 
@@ -863,6 +1078,51 @@ namespace Jeux_Multiples
             var t = new Timer { Interval = 650 };
             t.Tick += (s, ev) => { ((Timer)s).Stop(); ((Timer)s).Dispose(); PostDistribution(); };
             t.Start();
+        }
+
+        private void DistribuerMulti()
+        {
+            // Host only
+            if (!IsMultiplayer || !NetworkManager.Instance.IsHost) return;
+
+            // Mise simple (50 chacun) pour le multi
+            _mise = 50;
+            _miseMain2 = 50;
+            if (_jetons < _mise || _jetons2 < _miseMain2)
+            {
+                _message = "Pas assez de jetons pour jouer.";
+                _sousMessage = "";
+                AfficherPhase(Phase.Fin);
+                Invalidate();
+                SendStateToClient();
+                return;
+            }
+
+            _jetons -= _mise;
+            _jetons2 -= _miseMain2;
+
+            _paquet = new BJPaquet(2); _paquet.Melanger();
+            _mainJoueur.Clear(); _mainJoueur2.Clear(); _mainCroupier.Clear();
+            _splitActif = true; _joueurSurMain2 = false;
+            _enCours = true; _attenteMise = false; _assurancePrise = false; _peutAssurance = false;
+            _message = ""; _sousMessage = "";
+            _peutSplitter = false;
+            AfficherPhase(Phase.Jeu);
+
+            // Deal: P1, C, P2, C(hide), P1, P2
+            AjouterCarteAnimee(_mainJoueur, _paquet.Tirer(true), false);
+            AjouterCarteAnimee(_mainCroupier, _paquet.Tirer(true), true);
+            AjouterCarteAnimee(_mainJoueur2, _paquet.Tirer(true), false);
+            AjouterCarteAnimee(_mainCroupier, _paquet.Tirer(false), true);
+            AjouterCarteAnimee(_mainJoueur, _paquet.Tirer(true), false);
+            AjouterCarteAnimee(_mainJoueur2, _paquet.Tirer(true), false);
+
+            _peutDoubler = (_jetons >= _mise);
+            _message = "Tour de " + _p1Name + " — Tirez ou Restez ?";
+            _sousMessage = _p1Name + " : " + BJCalcul.Score(_mainJoueur);
+            if (_btnSplit != null) _btnSplit.Visible = false;
+            Invalidate();
+            SendStateToClient();
         }
 
         private void PostDistribution()
@@ -917,6 +1177,15 @@ namespace Jeux_Multiples
         private void Tirer()
         {
             if (!_enCours || _iaEnCours) return;
+            if (IsMultiplayer && !_allowRemoteAction)
+            {
+                if (!IsMyTurn()) return;
+                if (!NetworkManager.Instance.IsHost)
+                {
+                    NetworkManager.Instance.SendPacket(new Packet("BJ_ACT", NetworkManager.Instance.MyPseudo, "HIT"));
+                    return;
+                }
+            }
             var mc = _joueurSurMain2 ? _mainJoueur2 : _mainJoueur;
             AjouterCarteAnimee(mc, _paquet.Tirer(true), false);
             _peutDoubler = false; _peutSplitter = false;
@@ -930,9 +1199,9 @@ namespace Jeux_Multiples
                 SonBust();
                 if (_splitActif && !_joueurSurMain2)
                 {
-                    _message = "Main 1 Bust ! Jouez la main 2...";
+                    _message = IsMultiplayer ? ("Bust ! Tour de " + _p2Name) : "Main 1 Bust ! Jouez la main 2...";
                     _joueurSurMain2 = true;
-                    _peutDoubler = (_jetons >= _miseMain2);
+                    _peutDoubler = IsMultiplayer ? (_jetons2 >= _miseMain2) : (_jetons >= _miseMain2);
                     _btnDoubler.Visible = _peutDoubler;
                 }
                 else
@@ -945,19 +1214,30 @@ namespace Jeux_Multiples
             { _sousMessage = "21 ! Parfait !"; Invalidate(); Rester(); }
             else
             { _message = "Tirez ou Restez ?"; Invalidate(); }
+
+            if (IsMultiplayer && NetworkManager.Instance.IsHost) SendStateToClient();
         }
 
         private void Rester()
         {
             if (!_enCours || _iaEnCours) return;
+            if (IsMultiplayer && !_allowRemoteAction)
+            {
+                if (!IsMyTurn()) return;
+                if (!NetworkManager.Instance.IsHost)
+                {
+                    NetworkManager.Instance.SendPacket(new Packet("BJ_ACT", NetworkManager.Instance.MyPseudo, "STAND"));
+                    return;
+                }
+            }
             if (_splitActif && !_joueurSurMain2)
             {
                 _joueurSurMain2 = true;
-                _peutDoubler = (_jetons >= _miseMain2);
+                _peutDoubler = IsMultiplayer ? (_jetons2 >= _miseMain2) : (_jetons >= _miseMain2);
                 _btnDoubler.Visible = _peutDoubler;
                 _btnSplit.Visible = false;
-                _message = "Main 2 \u25ba Tirez ou Restez ?";
-                _sousMessage = "Score M2 : " + BJCalcul.Score(_mainJoueur2);
+                _message = IsMultiplayer ? ("Tour de " + _p2Name + " — Tirez ou Restez ?") : "Main 2 \u25ba Tirez ou Restez ?";
+                _sousMessage = (IsMultiplayer ? (_p2Name + " : ") : "Score M2 : ") + BJCalcul.Score(_mainJoueur2);
                 Invalidate(); return;
             }
             _mainCroupier[1].FaceVisible = true;
@@ -965,15 +1245,42 @@ namespace Jeux_Multiples
             _btnTirer.Visible = false; _btnRester.Visible = false;
             _btnDoubler.Visible = false; _btnSplit.Visible = false;
             _iaEnCours = true; _timerIA.Start(); Invalidate();
+
+            if (IsMultiplayer && NetworkManager.Instance.IsHost) SendStateToClient();
         }
 
         private void Doubler()
         {
             if (!_enCours || _iaEnCours) return;
+            if (IsMultiplayer && !_allowRemoteAction)
+            {
+                if (!IsMyTurn()) return;
+                if (!NetworkManager.Instance.IsHost)
+                {
+                    NetworkManager.Instance.SendPacket(new Packet("BJ_ACT", NetworkManager.Instance.MyPseudo, "DOUBLE"));
+                    return;
+                }
+            }
             var mc = _joueurSurMain2 ? _mainJoueur2 : _mainJoueur;
             int miseCourante = _joueurSurMain2 ? _miseMain2 : _mise;
-            if (_jetons < miseCourante) { _sousMessage = "Pas assez de jetons !"; Invalidate(); return; }
-            _jetons -= miseCourante;
+            if (IsMultiplayer)
+            {
+                if (_joueurSurMain2)
+                {
+                    if (_jetons2 < miseCourante) { _sousMessage = "Pas assez de jetons !"; Invalidate(); return; }
+                    _jetons2 -= miseCourante;
+                }
+                else
+                {
+                    if (_jetons < miseCourante) { _sousMessage = "Pas assez de jetons !"; Invalidate(); return; }
+                    _jetons -= miseCourante;
+                }
+            }
+            else
+            {
+                if (_jetons < miseCourante) { _sousMessage = "Pas assez de jetons !"; Invalidate(); return; }
+                _jetons -= miseCourante;
+            }
             if (_joueurSurMain2) _miseMain2 *= 2; else _mise *= 2;
             AjouterCarteAnimee(mc, _paquet.Tirer(true), false);
             SonCarte(); _peutDoubler = false;
@@ -985,15 +1292,18 @@ namespace Jeux_Multiples
             {
                 SonBust();
                 if (_splitActif && !_joueurSurMain2)
-                { _joueurSurMain2 = true; _btnDoubler.Visible = _jetons >= _miseMain2; }
+                { _joueurSurMain2 = true; _btnDoubler.Visible = IsMultiplayer ? (_jetons2 >= _miseMain2) : (_jetons >= _miseMain2); }
                 else
                 { _mainCroupier[1].FaceVisible = true; FinRound("\u2639 Bust après double !", false); }
             }
             else Rester();
+
+            if (IsMultiplayer && NetworkManager.Instance.IsHost) SendStateToClient();
         }
 
         private void Split()
         {
+            if (IsMultiplayer) return; // Multi: la "main 2" correspond au joueur 2
             if (!_enCours || _iaEnCours || !_peutSplitter) return;
             if (_jetons < _mise) { _sousMessage = "Pas assez de jetons !"; Invalidate(); return; }
             _jetons -= _mise; _miseMain2 = _mise; _splitActif = true;
@@ -1013,6 +1323,7 @@ namespace Jeux_Multiples
 
         private void TimerIA_Tick(object sender, EventArgs e)
         {
+            if (IsMultiplayer && !NetworkManager.Instance.IsHost) return;
             int scIA = BJCalcul.ScoreComplet(_mainCroupier);
             if (scIA < 17)
             {
@@ -1021,6 +1332,7 @@ namespace Jeux_Multiples
                 scIA = BJCalcul.ScoreComplet(_mainCroupier);
                 _sousMessage = "Croupier : " + scIA;
                 Invalidate();
+                if (IsMultiplayer) SendStateToClient();
                 if (scIA > 21)
                 { _timerIA.Stop(); _iaEnCours = false; SonVictoire(); FinRound("\u2665 Croupier Bust ! Vous gagnez !", true); }
             }
@@ -1044,6 +1356,27 @@ namespace Jeux_Multiples
             int scIA = BJCalcul.ScoreComplet(_mainCroupier);
             int sc1 = BJCalcul.Score(_mainJoueur);
             int sc2 = BJCalcul.Score(_mainJoueur2);
+
+            if (IsMultiplayer)
+            {
+                bool p1Win = (sc1 <= 21) && (scIA > 21 || sc1 > scIA);
+                bool p2Win = (sc2 <= 21) && (scIA > 21 || sc2 > scIA);
+
+                if (p1Win) _jetons += _mise * 2;
+                if (p2Win) _jetons2 += _miseMain2 * 2;
+
+                try { if (p1Win) _ = NetworkManager.Instance.Lobby.RecordWinAsync(_p1Name, "BlackJack"); } catch { }
+                try { if (p2Win) _ = NetworkManager.Instance.Lobby.RecordWinAsync(_p2Name, "BlackJack"); } catch { }
+
+                _enCours = false;
+                _message = (p1Win ? "J1:✓ " : "J1:✗ ") + (p2Win ? "J2:✓" : "J2:✗");
+                _sousMessage = $"Croupier:{scIA} | { _p1Name}:{sc1}  { _p2Name}:{sc2}";
+                AfficherPhase(Phase.Fin);
+                Invalidate();
+                SendStateToClient();
+                return;
+            }
+
             int gain = 0; string msg = "";
 
             if (sc1 <= 21 && sc1 > scIA) { gain += _mise * 2; msg += "M1:\u265a "; }
@@ -1127,6 +1460,16 @@ namespace Jeux_Multiples
                 MessageBox.Show("Impossible d'ouvrir Accueil.", "Erreur",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (IsMultiplayer)
+            {
+                NetworkManager.Instance.OnPacketReceived -= OnPacketReceived;
+                NetworkManager.Instance.OnDisconnected -= OnDisconnected;
+            }
+            base.OnFormClosing(e);
         }
 
         // Sons

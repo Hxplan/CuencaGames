@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -71,10 +71,13 @@ namespace Jeux_Multiples
         private Button btnNouvellePartie;
         private Button btnAccueil;
         private Panel panelIndicateur;
+        private Label lblAVousDeJouer;
 
         public string Joueur1 = "Blancs";
         public string Joueur2 = "Noirs";
         public bool IsMultiplayer = false;
+
+        private Panel gameContainer;
 
         // ════════════════════════════════════════════════════════
         // CONSTRUCTEUR
@@ -85,8 +88,12 @@ namespace Jeux_Multiples
             if (!string.IsNullOrWhiteSpace(joueur1)) Joueur1 = joueur1;
             if (!string.IsNullOrWhiteSpace(joueur2)) Joueur2 = joueur2;
             this.IsMultiplayer = isMultiplayer;
+            
+            // Full Screen
+            FormUtils.ApplyFullScreen(this);
+            
             ConstruireUI();
-
+            
             // Timer clignotement captures obligatoires
             timerClignote = new Timer { Interval = 600 };
             timerClignote.Tick += (s, e) => { clignoteVisible = !clignoteVisible; panelJeu?.Invalidate(); };
@@ -99,8 +106,8 @@ namespace Jeux_Multiples
             if (IsMultiplayer)
             {
                 NetworkManager.Instance.OnPacketReceived += OnPacketReceived;
-                NetworkManager.Instance.OnDisconnected += OnDisconnected;
-                // Host = Blancs (Joueur 1), Client = Noirs (Joueur 2)
+                NetworkManager.Instance.OnDisconnected   += OnDisconnected;
+                // Host = Blancs (tourJoueur==1), Client = Noirs (tourJoueur==2)
                 if (NetworkManager.Instance.IsHost)
                 {
                     Joueur1 = NetworkManager.Instance.MyPseudo;
@@ -111,18 +118,27 @@ namespace Jeux_Multiples
                     Joueur1 = NetworkManager.Instance.OpponentPseudo;
                     Joueur2 = NetworkManager.Instance.MyPseudo;
                 }
-                this.Text = $"Jeu de Dames - {Joueur1} vs {Joueur2}";
+                this.Text = $"Jeu de Dames - {Joueur1} (⬜) vs {Joueur2} (⬛)";
+
+                // Masquer bouton nouvelle partie (reset solo interdit en multi)
+                if (btnNouvellePartie != null) btnNouvellePartie.Visible = false;
+
                 MettreAJourInfo();
                 panelJeu?.Invalidate();
             }
+            
+            this.Resize += (s,e) => 
+            {
+                if(gameContainer != null) FormUtils.CenterControl(gameContainer, this);
+                if(lblTitre != null) lblTitre.Width = this.ClientSize.Width;
+            };
         }
 
         // Pour compatibilité ou designer
         public Dame() : this("Blancs", "Noirs", false) { }
 
-        // ════════════════════════════════════════════════════════
-        // RESET ÉTAT (sans toucher aux contrôles UI)
-        // ════════════════════════════════════════════════════════
+        // ... ResetEtat ...
+
         private void ResetEtat()
         {
             plateau = new int[CASES, CASES];
@@ -165,44 +181,50 @@ namespace Jeux_Multiples
             int formHeight = boardSize + 110;
 
             this.Text = $"Jeu de Dames - {Joueur1} vs {Joueur2}";
-            this.ClientSize = new Size(formWidth, formHeight);
-            this.MinimumSize = new Size(formWidth + 16, formHeight + 39);
-            this.MaximumSize = this.MinimumSize;
             this.BackColor = BG;
-            this.FormBorderStyle = FormBorderStyle.FixedSingle;
-            this.StartPosition = FormStartPosition.CenterScreen;
-            this.Font = new Font("Segoe UI", 10f);
-            this.SetStyle(ControlStyles.OptimizedDoubleBuffer |
-                          ControlStyles.AllPaintingInWmPaint, true);
+            this.DoubleBuffered = true;
 
-            // Titre
+            // Titre global (outside container)
             lblTitre = new Label
             {
                 Text = "♛  JEU DE DAMES  ♛",
                 ForeColor = Color.FromArgb(220, 175, 80),
-                Font = new Font("Georgia", 17f, FontStyle.Bold),
+                Font = new Font("Georgia", 24f, FontStyle.Bold),
                 AutoSize = false,
                 TextAlign = ContentAlignment.MiddleCenter,
                 BackColor = Color.Transparent,
-                Bounds = new Rectangle(0, 6, formWidth, 36)
+                Height = 50,
+                Dock = DockStyle.Top
             };
             this.Controls.Add(lblTitre);
 
-            // Plateau (PanelDouble = anti-flickering)
+            // Container centré
+            gameContainer = new Panel
+            {
+                Size = new Size(formWidth, formHeight),
+                BackColor = Color.Transparent
+            };
+            this.Controls.Add(gameContainer);
+            FormUtils.CenterControl(gameContainer, this);
+
+            // --- Elements inside container ---
+            // Repositionnement relatif à (0,0) du container
+            
+            // Plateau
             panelJeu = new PanelDouble
             {
-                Bounds = new Rectangle(10, 48, boardSize, boardSize),
+                Bounds = new Rectangle(0, 0, boardSize, boardSize),
                 BackColor = Color.Transparent
             };
             panelJeu.Paint += PanelJeu_Paint;
             panelJeu.MouseClick += PanelJeu_MouseClick;
-            this.Controls.Add(panelJeu);
+            gameContainer.Controls.Add(panelJeu);
 
             // Panneau latéral
             int latX = boardSize + 18;
             panelLateral = new Panel
             {
-                Bounds = new Rectangle(latX, 48, panelLatW, boardSize),
+                Bounds = new Rectangle(latX, 0, panelLatW, boardSize),
                 BackColor = PANEL_BG
             };
             panelLateral.Paint += (s, e) =>
@@ -210,15 +232,15 @@ namespace Jeux_Multiples
                 using (var pen = new Pen(Color.FromArgb(100, 180, 130, 50), 1))
                     e.Graphics.DrawRectangle(pen, 0, 0, panelLateral.Width - 1, panelLateral.Height - 1);
             };
-            this.Controls.Add(panelLateral);
+            gameContainer.Controls.Add(panelLateral);
 
             // Barre indicatrice de tour
             panelIndicateur = new Panel
             {
-                Bounds = new Rectangle(latX, 48, panelLatW, 8),
+                Bounds = new Rectangle(latX, 0, panelLatW, 8),
                 BackColor = Color.Gray
             };
-            this.Controls.Add(panelIndicateur);
+            gameContainer.Controls.Add(panelIndicateur);
 
             // Label tour
             lblTour = new Label
@@ -229,14 +251,27 @@ namespace Jeux_Multiples
                 AutoSize = false,
                 TextAlign = ContentAlignment.MiddleCenter,
                 BackColor = Color.Transparent,
-                Bounds = new Rectangle(latX, 60, panelLatW, 46)
+                Bounds = new Rectangle(latX, 12, panelLatW, 46)
             };
-            this.Controls.Add(lblTour);
+            gameContainer.Controls.Add(lblTour);
+
+            // Petit "À vous de jouer"
+            lblAVousDeJouer = new Label
+            {
+                Text = "",
+                ForeColor = Color.FromArgb(0, 255, 136),
+                Font = new Font("Segoe UI", 9f),
+                AutoSize = true,
+                BackColor = Color.Transparent,
+                Location = new Point(latX, 60)
+            };
+            gameContainer.Controls.Add(lblAVousDeJouer);
 
             // Scores
-            int scoreY = 112;
-            CreerCaseScore($"⬜ {Joueur1}", latX, scoreY, out lblScoreBlanc, Color.FromArgb(240, 235, 215));
-            CreerCaseScore($"⬛ {Joueur2}", latX, scoreY + 60, out lblScoreNoir, Color.FromArgb(160, 140, 100));
+            int scoreY = 64; 
+            // Note: CreerCaseScore adds to parent.
+            CreerCaseScore(gameContainer, $"⬜ {Joueur1}", latX, scoreY, out lblScoreBlanc, Color.FromArgb(240, 235, 215));
+            CreerCaseScore(gameContainer, $"⬛ {Joueur2}", latX, scoreY + 60, out lblScoreNoir, Color.FromArgb(160, 140, 100));
 
             // Historique titre
             lblHistoriqueTitre = new Label
@@ -249,7 +284,7 @@ namespace Jeux_Multiples
                 BackColor = Color.Transparent,
                 Bounds = new Rectangle(latX, scoreY + 132, panelLatW, 22)
             };
-            this.Controls.Add(lblHistoriqueTitre);
+            gameContainer.Controls.Add(lblHistoriqueTitre);
 
             // Historique liste
             listHistorique = new ListBox
@@ -263,23 +298,23 @@ namespace Jeux_Multiples
                 ScrollAlwaysVisible = false,
                 SelectionMode = SelectionMode.None
             };
-            this.Controls.Add(listHistorique);
+            gameContainer.Controls.Add(listHistorique);
 
             // Boutons
-            int btnY = boardSize + 58;
+            int btnY = boardSize + 20;
 
-            btnAccueil = CréerBouton("🏠  Accueil", 10, btnY,
-                Color.FromArgb(45, 30, 10), Color.FromArgb(220, 175, 80));
-            btnAccueil.Click += BtnAccueil_Click;
-            this.Controls.Add(btnAccueil);
-
+            btnAccueil = FormUtils.CreateBackButton(this, () => BtnAccueil_Click(this, EventArgs.Empty)); 
+            // Put it bottom left of container
+            btnAccueil.Parent = gameContainer; // Re-parent
+            btnAccueil.Location = new Point(0, btnY);
+            
             btnNouvellePartie = CréerBouton("↺  Nouvelle Partie", boardSize - 168, btnY,
                 Color.FromArgb(60, 38, 10), Color.FromArgb(220, 175, 80));
             btnNouvellePartie.Click += (s, e) => NouvellePartie();
-            this.Controls.Add(btnNouvellePartie);
+            gameContainer.Controls.Add(btnNouvellePartie);
         }
 
-        private void CreerCaseScore(string titre, int x, int y, out Label lblValeur, Color couleurTitre)
+        private void CreerCaseScore(Control parent, string titre, int x, int y, out Label lblValeur, Color couleurTitre)
         {
             var pnl = new Panel { Bounds = new Rectangle(x + 8, y, 184, 52), BackColor = Color.FromArgb(42, 27, 8) };
             pnl.Paint += (s, e) =>
@@ -287,9 +322,9 @@ namespace Jeux_Multiples
                 using (var pen = new Pen(Color.FromArgb(80, 180, 130, 50), 1))
                     e.Graphics.DrawRectangle(pen, 0, 0, pnl.Width - 1, pnl.Height - 1);
             };
-            this.Controls.Add(pnl);
+            parent.Controls.Add(pnl);
 
-            this.Controls.Add(new Label
+            parent.Controls.Add(new Label
             {
                 Text = titre,
                 ForeColor = couleurTitre,
@@ -310,7 +345,7 @@ namespace Jeux_Multiples
                 BackColor = Color.Transparent,
                 Bounds = new Rectangle(x + 8, y + 24, 184, 26)
             };
-            this.Controls.Add(lblValeur);
+            parent.Controls.Add(lblValeur);
         }
 
         private Button CréerBouton(string texte, int x, int y, Color bg, Color fg)
@@ -334,40 +369,78 @@ namespace Jeux_Multiples
 
         private void OnDisconnected()
         {
-             this.Invoke(new Action(() => 
+             this.Invoke(new Action(() =>
              {
-                 MessageBox.Show("Adversaire déconnecté.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                 // En ligne: retour direct à l'accueil, sans notification.
+                 try { NetworkManager.Instance.Disconnect(); } catch { }
+                 try
+                 {
+                     var acc = new Accueil();
+                     acc.Show();
+                 }
+                 catch { }
                  this.Close();
              }));
         }
 
         private void OnPacketReceived(Packet p)
         {
-            if (p.Type == "MOVE")
-            {
-                // Format: "nligne;ncol" (la sélection initiale est gérée par l'état du plateau côté client, 
-                // mais pour simplifier ici on envoie juste le COUP final: FROM_L,FROM_C,TO_L,TO_C)
-                // Wait, Dame logic is complex (multi-step capture). 
-                // Let's assume we sync the CLICK events or the MOVE events.
-                // Simpler: Send "L1,C1,L2,C2" -> Move [L1,C1] to [L2,C2].
-                
-                // Parsing:
-                string[] parts = p.Content.Split(',');
-                if (parts.Length == 4)
-                {
-                    int fromL = int.Parse(parts[0]);
-                    int fromC = int.Parse(parts[1]);
-                    int toL = int.Parse(parts[2]);
-                    int toC = int.Parse(parts[3]);
+            if (this.IsDisposed || !this.IsHandleCreated) return;
 
-                    this.Invoke(new Action(() => 
+            if (p.Type == "REMATCH_REQUEST")
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed || partieTerminee == false) return;
+                    var r = MessageBox.Show(p.Sender + " veut rejouer. Accepter ?", "Relancer la partie",
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                    if (r == DialogResult.Yes)
+                        NetworkManager.Instance.SendPacket(new Packet("REMATCH_ACCEPT", NetworkManager.Instance.MyPseudo, ""));
+                    else
                     {
-                        // Simulate local state
-                        selectionne = new Point(fromL, fromC);
-                        CalculerMouvements(fromL, fromC); // Populate lists
-                        EffectuerMouvement(toL, toC, false); // False = remote
-                    }));
-                }
+                        NetworkManager.Instance.SendPacket(new Packet("REMATCH_REFUSE", NetworkManager.Instance.MyPseudo, ""));
+                        NetworkManager.Instance.ReturnToLobby = true;
+                        this.Close();
+                    }
+                }));
+            }
+            else if (p.Type == "REMATCH_ACCEPT")
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed) return;
+                    ResetEtat();
+                    MettreAJourInfo();
+                    panelJeu?.Invalidate();
+                }));
+            }
+            else if (p.Type == "REMATCH_REFUSE")
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed) return;
+                    NetworkManager.Instance.ReturnToLobby = true;
+                    this.Close();
+                }));
+            }
+            else if (p.Type == "MOVE")
+            {
+                // Format: "fromL,fromC,toL,toC"
+                string[] parts = p.Content.Split(',');
+                if (parts.Length != 4) return;
+                if (!int.TryParse(parts[0], out int fromL) || !int.TryParse(parts[1], out int fromC) ||
+                    !int.TryParse(parts[2], out int toL)   || !int.TryParse(parts[3], out int toC)) return;
+
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed || partieTerminee) return;
+                    // Réinitialiser la sélection locale (on est spectateur du coup adverse)
+                    captureEnCours  = false;
+                    pionEnCapture   = new Point(-1, -1);
+                    selectionne     = new Point(fromL, fromC);
+                    CalculerMouvements(fromL, fromC);
+                    EffectuerMouvement(toL, toC, false);
+                }));
             }
         }
 
@@ -385,6 +458,75 @@ namespace Jeux_Multiples
         // ════════════════════════════════════════════════════════
         // BOUTON ACCUEIL
         // ════════════════════════════════════════════════════════
+        private void ShowRematchDialog()
+        {
+            // Seul l'hôte propose de relancer.
+            if (IsMultiplayer && !NetworkManager.Instance.IsHost)
+            {
+                var wait = new Form
+                {
+                    Text = "Partie terminée",
+                    Size = new Size(360, 150),
+                    StartPosition = FormStartPosition.CenterParent,
+                    FormBorderStyle = FormBorderStyle.FixedDialog,
+                    BackColor = Color.FromArgb(20, 20, 32),
+                    ForeColor = Color.White,
+                };
+                wait.Controls.Add(new Label
+                {
+                    Text = "En attente de la décision de l'hôte…",
+                    Location = new Point(18, 18),
+                    ForeColor = BORD,
+                    AutoSize = true
+                });
+                var btnSalonWait = new Button
+                {
+                    Text = "Retour au salon",
+                    Size = new Size(140, 36),
+                    Location = new Point((360 - 140) / 2, 74),
+                    FlatStyle = FlatStyle.Flat,
+                    ForeColor = CAPTURE,
+                };
+                btnSalonWait.Click += (s, e) =>
+                {
+                    NetworkManager.Instance.ReturnToLobby = true;
+                    wait.Close();
+                    this.Close();
+                };
+                wait.Controls.Add(btnSalonWait);
+                wait.ShowDialog(this);
+                return;
+            }
+
+            var dlg = new Form
+            {
+                Text = "Partie terminée",
+                Size = new Size(320, 140),
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                BackColor = Color.FromArgb(20, 20, 32),
+                ForeColor = Color.White,
+            };
+            var btnRelancer = new Button { Text = "Relancer la partie", Size = new Size(140, 36), Location = new Point(24, 64), FlatStyle = FlatStyle.Flat, ForeColor = POSSIBLE };
+            var btnSalon = new Button { Text = "Retour au salon", Size = new Size(140, 36), Location = new Point(168, 64), FlatStyle = FlatStyle.Flat, ForeColor = CAPTURE };
+            btnRelancer.Click += (s, e) =>
+            {
+                NetworkManager.Instance.SendPacket(new Packet("REMATCH_REQUEST", NetworkManager.Instance.MyPseudo, ""));
+                dlg.Close();
+            };
+            btnSalon.Click += (s, e) =>
+            {
+                NetworkManager.Instance.SendPacket(new Packet("REMATCH_REFUSE", NetworkManager.Instance.MyPseudo, ""));
+                NetworkManager.Instance.ReturnToLobby = true;
+                dlg.Close();
+                this.Close();
+            };
+            dlg.Controls.Add(btnRelancer);
+            dlg.Controls.Add(btnSalon);
+            dlg.Controls.Add(new Label { Text = "Que voulez-vous faire ?", Location = new Point(24, 20), ForeColor = BORD, AutoSize = true });
+            dlg.ShowDialog(this);
+        }
+
         private void BtnAccueil_Click(object sender, EventArgs e)
         {
             timerClignote?.Stop();
@@ -582,6 +724,8 @@ namespace Jeux_Multiples
             int ligne = (e.Y - OFFSET) / TAILLE;
             if (col < 0 || col >= CASES || ligne < 0 || ligne >= CASES) return;
 
+            bool captureObligatoire = ACapturePossible(tourJoueur);
+
             // Pendant une capture multiple : seules les destinations de capture sont valides
             if (captureEnCours)
             {
@@ -600,14 +744,24 @@ namespace Jeux_Multiples
                 selectionne = new Point(ligne, col);
                 CalculerMouvements(ligne, col);
 
-                // Prise obligatoire : bloquer les mouvements simples si ce pion ne peut pas capturer
-                if (ACapturePossible(tourJoueur) && capturesPossibles.Count == 0)
+                // Prise obligatoire: si une capture existe quelque part, on ne permet QUE les captures.
+                if (captureObligatoire)
+                {
                     mouvementsPossibles.Clear();
+                    // Si ce pion ne peut pas capturer, ne pas le sélectionner.
+                    if (capturesPossibles.Count == 0)
+                    {
+                        selectionne = new Point(-1, -1);
+                        capturesPossibles.Clear();
+                    }
+                }
             }
             else if (selectionne.X != -1)
             {
-                if (EstDansListe(capturesPossibles, ligne, col) ||
-                    EstDansListe(mouvementsPossibles, ligne, col))
+                bool allowed =
+                    EstDansListe(capturesPossibles, ligne, col) ||
+                    (!captureObligatoire && EstDansListe(mouvementsPossibles, ligne, col));
+                if (allowed)
                     EffectuerMouvement(ligne, col, true);
                 else
                 {
@@ -828,10 +982,12 @@ namespace Jeux_Multiples
             {
                 partieTerminee = true;
                 string gagnant = (tourJoueur == 1) ? Joueur2 : Joueur1;
+                try { _ = NetworkManager.Instance.Lobby.RecordWinAsync(gagnant, "Dames"); } catch { }
                 MessageBox.Show(
                     $"⬛⬜  {gagnant} a gagné !  ⬜⬛\n\nScore final :\n  {Joueur1} : {scoreBlanc} captures\n  {Joueur2} : {scoreNoir} captures",
                     "Fin de partie", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 MettreAJourInfo();
+                if (IsMultiplayer) ShowRematchDialog();
             }
         }
 
@@ -892,6 +1048,16 @@ namespace Jeux_Multiples
                 string joueur = (tourJoueur == 2) ? $"⬛  Tour de {Joueur2.ToUpper()}" : $"⬜  Tour de {Joueur1.ToUpper()}";
                 if (captureEnCours) joueur += "\n⚡ Capture multiple !";
                 else if (ACapturePossible(tourJoueur)) joueur += "\n⚠ Prise obligatoire !";
+                // En multi, indiquer clairement si c'est notre tour ou pas
+                if (IsMultiplayer)
+                {
+                    bool monTour = NetworkManager.Instance.IsHost ? (tourJoueur == 1) : (tourJoueur == 2);
+                    joueur += monTour ? "\n▶ Votre tour" : "\n⏳ Attente...";
+                    if (lblAVousDeJouer != null)
+                        lblAVousDeJouer.Text = monTour ? "À vous de jouer" : "Attente adversaire...";
+                }
+                else if (lblAVousDeJouer != null)
+                    lblAVousDeJouer.Text = "À vous de jouer";
                 lblTour.Text = joueur;
                 lblTour.ForeColor = (tourJoueur == 2)
                     ? Color.FromArgb(200, 180, 130)

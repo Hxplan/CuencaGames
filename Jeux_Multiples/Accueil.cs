@@ -1,263 +1,502 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using System.Drawing;
-using System.Drawing.Drawing2D;
+using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace Jeux_Multiples
 {
+    // ════════════════════════════════════════════════════════════
+    //  ACCUEIL — Écran principal
+    // ════════════════════════════════════════════════════════════
     public partial class Accueil : Form
     {
-        // ── Couleurs ────────────────────────────────────────────────
-        private readonly Color colFond = Color.FromArgb(10, 10, 18);
-        private readonly Color colAccent1 = Color.FromArgb(0, 255, 136); // Vert néon
-        private readonly Color colAccent2 = Color.FromArgb(0, 238, 255); // Cyan néon
-        private readonly Color colAccent3 = Color.FromArgb(255, 34, 68); // Rouge néon
-        private readonly Color colPanel = Color.FromArgb(18, 18, 28);
-        private readonly Color colText = Color.White;
+        // ── Palette ──────────────────────────────────────────────
+        private readonly Color C_BG     = Color.FromArgb(10, 10, 18);
+        private readonly Color C_PANEL  = Color.FromArgb(16, 16, 26);
+        private readonly Color C_CYAN   = Color.FromArgb(0, 238, 255);
+        private readonly Color C_GREEN  = Color.FromArgb(0, 255, 136);
+        private readonly Color C_RED    = Color.FromArgb(255, 34, 68);
 
-        // ── Contrôles ───────────────────────────────────────────────
-        private TextBox txtJoueur1;
-        private TextBox txtJoueur2;
-        private Label lblTitre;
+        // ── Contrôles ────────────────────────────────────────────
+        private TextBox   _txtPseudo;
+        private List<(Button btn, bool supportsMulti)> _gameButtons;
+        private Panel     _pnlLeaderboard;
+        private ListBox   _listLeaderboard;
+        private Timer     _leaderboardRefreshTimer;
+        private UserConfig _cfg;
 
         public Accueil()
         {
             InitializeComponent();
             ConfigForm();
-            // Force load event logic to clear old designer controls
+            _cfg = UserConfig.Load();
             Acceuil_Load(this, EventArgs.Empty);
         }
 
         private void ConfigForm()
         {
-            this.Text = "ARCADE MULTIPLAYER";
-            this.Size = new Size(900, 600);
-            this.MinimumSize = new Size(900, 600);
-            this.StartPosition = FormStartPosition.CenterScreen;
-            this.BackColor = colFond;
-            this.ForeColor = colText;
+            this.Text = "Jeux Multiples - Accueil";
+            
+            // Full Screen Mode
+            FormUtils.ApplyFullScreen(this);
+            
+            this.BackColor     = C_BG;
+            this.ForeColor     = Color.White;
             this.DoubleBuffered = true;
         }
 
         private void Acceuil_Load(object sender, EventArgs e)
         {
-            // Nettoyer les vieux contrôles du Designer pour une refonte totale
             this.Controls.Clear();
-            ConstruireInterface();
+            BuildUI();
+            // Start leaderboard loading
+            LoadLeaderboard();
+
+            _leaderboardRefreshTimer?.Stop();
+            _leaderboardRefreshTimer = new Timer { Interval = 30_000 };
+            _leaderboardRefreshTimer.Tick += (s, ev) => LoadLeaderboard();
+            _leaderboardRefreshTimer.Start();
+
+            // Check update in background (best-effort)
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(800);
+                try { await UpdateManager.CheckAndPromptAsync(this); } catch { }
+            });
         }
 
-        private void ConstruireInterface()
+        private void BuildUI()
         {
-            // ── Titre ──────────────────────────────────────────────
-            lblTitre = new Label
-            {
-                Text = "ARCADE ZONE",
-                Font = new Font("Segoe UI", 36, FontStyle.Bold),
-                ForeColor = colAccent2,
-                AutoSize = true,
-                Location = new Point(0, 30),
-                TextAlign = ContentAlignment.MiddleCenter
+            int W = this.ClientSize.Width;
+            int H = this.ClientSize.Height;
+
+            // ── Titre ────────────────────────────────────────────
+            int titleY = H / 10; // 10% from top
+            var lblTitle = new Label {
+                Text      = "CUENCAGAMES",
+                Font      = new Font("Segoe UI Black", 32, FontStyle.Bold),
+                ForeColor = C_CYAN,
+                AutoSize  = false,
+                Size      = new Size(W, 60),
+                Location  = new Point(0, titleY),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
-            // Centrage horizontal après création
-            lblTitre.Location = new Point((this.ClientSize.Width - lblTitre.PreferredWidth) / 2, 30);
-            this.Controls.Add(lblTitre);
+            this.Controls.Add(lblTitle);
 
-            // ── Panneau Identité ───────────────────────────────────
-            Panel panelJoueurs = new Panel
-            {
-                Size = new Size(400, 100), // Plus petit, centré
-                Location = new Point((this.ClientSize.Width - 400) / 2, 120),
-                BackColor = colPanel,
+            var lblSub = new Label {
+                Text      = "ARCADE MULTIJOUEUR",
+                Font      = new Font("Segoe UI", 12, FontStyle.Bold),
+                ForeColor = Color.FromArgb(60, 60, 80),
+                AutoSize  = false,
+                Size      = new Size(W, 30),
+                Location  = new Point(0, titleY + 60),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
-            panelJoueurs.Paint += (s, e) =>
-            {
-                ControlPaint.DrawBorder(e.Graphics, panelJoueurs.ClientRectangle, colAccent1, ButtonBorderStyle.Solid);
-            };
-            this.Controls.Add(panelJoueurs);
+            this.Controls.Add(lblSub);
 
-            // Input Pseudo
-            Label lblJ1 = NewLabel("VOTRE PSEUDO", 0, 25, colAccent2);
-            lblJ1.AutoSize = false;
-            lblJ1.Size = new Size(400, 25);
-            lblJ1.TextAlign = ContentAlignment.MiddleCenter;
-            panelJoueurs.Controls.Add(lblJ1);
-
-            txtJoueur1 = NewTextBox(50, 50); // Centré dans le panel 400 wide -> 300 wide text box à x=50
-            txtJoueur1.Text = Environment.UserName; // Auto-fill windows username
-            txtJoueur1.TextAlign = HorizontalAlignment.Center;
-            panelJoueurs.Controls.Add(txtJoueur1);
-
-            // Pas de Joueur 2 (Auto pour local)
-            txtJoueur2 = new TextBox(); // Hidden dummy for logic compatibility if needed, or just remove
-            txtJoueur2.Text = "Invité"; 
+            // ── Panneau pseudo ───────────────────────────────────
+            int panW = 420, panH = 56;
+            int panY = titleY + 110; 
+            int panX = (W - panW) / 2;
             
-            // ── Mode En Ligne Toggle ───────────────────────────────
-            CheckBox chkOnline = new CheckBox();
-            chkOnline.Text = "JEU EN RÉSEAU (LAN)";
-            chkOnline.Appearance = Appearance.Button;
-            chkOnline.TextAlign = ContentAlignment.MiddleCenter;
-            chkOnline.Size = new Size(240, 40);
-            chkOnline.Location = new Point((this.ClientSize.Width - 240) / 2, 190);
-            chkOnline.FlatStyle = FlatStyle.Flat;
-            chkOnline.BackColor = Color.FromArgb(40, 20, 60);
-            chkOnline.ForeColor = Color.Gray;
-            chkOnline.Font = new Font("Segoe UI Black", 11, FontStyle.Bold);
-            chkOnline.Cursor = Cursors.Hand;
+            var panPseudo = new Panel {
+                Location  = new Point(panX, panY),
+                Size      = new Size(panW, panH),
+                BackColor = C_PANEL,
+                Anchor    = AnchorStyles.Top
+            };
+            panPseudo.Paint += (s, e) =>
+                ControlPaint.DrawBorder(e.Graphics, panPseudo.ClientRectangle,
+                    Color.FromArgb(40, C_CYAN.R, C_CYAN.G, C_CYAN.B), ButtonBorderStyle.Solid);
+            this.Controls.Add(panPseudo);
+
+            panPseudo.Controls.Add(new Label {
+                Text      = "PSEUDO",
+                Location  = new Point(14, 8),
+                AutoSize  = true,
+                Font      = new Font("Segoe UI", 8, FontStyle.Bold),
+                ForeColor = Color.FromArgb(80, 80, 100),
+            });
+
+            _txtPseudo = new TextBox {
+                Text        = string.IsNullOrWhiteSpace(_cfg?.Pseudo) ? Environment.UserName : _cfg.Pseudo,
+                Location    = new Point(14, 26),
+                Size        = new Size(panW - 28, 22),
+                Font        = new Font("Segoe UI", 11),
+                BackColor   = C_PANEL,
+                ForeColor   = Color.White,
+                BorderStyle = BorderStyle.None,
+            };
+            _txtPseudo.TextChanged += (s, e) =>
+            {
+                // Sauvegarde simple en continu (best-effort)
+                if (_cfg == null) _cfg = new UserConfig();
+                _cfg.Pseudo = GetPseudo();
+                UserConfig.Save(_cfg);
+            };
+            panPseudo.Controls.Add(_txtPseudo);
+
+            // ── Grille de jeux ────────────────────────────────────
             
-            chkOnline.CheckedChanged += (s, e) => 
-            {
-                if (chkOnline.Checked)
-                {
-                    chkOnline.BackColor = Color.Magenta;
-                    chkOnline.ForeColor = Color.White;
-                }
-                else
-                {
-                    chkOnline.BackColor = Color.FromArgb(40, 20, 60);
-                    chkOnline.ForeColor = Color.Gray;
-                }
+            // Calculate center vertical position for the grid
+            int btnW   = 220, btnH = 80; // Slightly larger buttons
+            int gapX   = 20, gapY = 20;
+            int cols   = 3;
+            // 6 games total -> 2 rows
+            int rows = 2; 
+
+            int gridW  = cols * btnW + (cols - 1) * gapX;
+            int gridH  = rows * btnH + (rows - 1) * gapY;
+
+            int gridX  = (W - gridW) / 2;
+            // Center vertically between pseudo panel and bottom (approx)
+            int availableH = H - (panY + panH); 
+            int gridY  = (panY + panH) + (availableH - gridH) / 2 - 40; // Shift up a bit to leave room for quit
+            
+            if (gridY < panY + panH + 20) gridY = panY + panH + 20; // Minimum gap
+
+            // supportsMulti = true → au clic on propose "Local" ou "Réseau"
+            var games = new (string Label, Color Color, string Type, bool SupportsMulti, Func<string, string, bool, Form> Factory)[] {
+                ("⬡  PUISSANCE 4",  C_CYAN,                         "Puissance4", true,  (j1, j2, mp) => new Puissance_4(j1, j2, mp)),
+                ("♟  JEU DE DAMES", Color.FromArgb(180, 120, 255),  "Dames",      true,  (j1, j2, mp) => new Dame(j1, j2, mp)),
+                ("☠  MORT PION",    C_RED,                           "MortPion",   true,  (j1, j2, mp) => new mort_Pion(j1, j2, mp)),
+                ("🐍  SNAKE",        Color.FromArgb(0, 200, 80),     "Snake",      false, (j1, j2, mp) => new Snake(j1)),
+                ("🃏  BLACKJACK",    Color.FromArgb(255, 200, 0),    "BlackJack",  false, (j1, j2, mp) => new BlackJack(j1, j2, false)),
+                ("🎰  POKER",        Color.FromArgb(255, 130, 0),    "Poker",      false, (j1, j2, mp) => new Poker(j1, j2, false)),
             };
-            this.Controls.Add(chkOnline);
 
-            // ── Grille de jeux ─────────────────────────────────────
-            int gridY = 250;
-            int btnW = 200;
-            int btnH = 60;
-            int gapX = 30;
-            int gapY = 30;
-            // 3 colonnes centré
-            int startX = (this.ClientSize.Width - (btnW * 3 + gapX * 2)) / 2;
-
-            // Ligne 1
-            AddGameBtn("PUISSANCE 4", startX, gridY, colAccent1, (s, e) => LancerJeu(() => new Puissance_4(GetJ1(), GetJ2(), NetworkManager.Instance.IsConnected)));
-            AddGameBtn("JEU DE DAMES", startX + btnW + gapX, gridY, colAccent2, (s, e) => LancerJeu(() => new Dame(GetJ1(), GetJ2(), NetworkManager.Instance.IsConnected)));
-            AddGameBtn("MORT PION", startX + (btnW + gapX) * 2, gridY, colAccent3, (s, e) => LancerJeu(() => new mort_Pion(GetJ1(), GetJ2(), NetworkManager.Instance.IsConnected)));
-
-            // Ligne 2
-            AddGameBtn("SNAKE", startX, gridY + btnH + gapY, Color.Lime, (s, e) => LancerJeu(() => new Snake(GetJ1())));
-            AddGameBtn("BLACKJACK", startX + btnW + gapX, gridY + btnH + gapY, Color.Gold, (s, e) => LancerJeu(() => new BlackJack(GetJ1())));
-            AddGameBtn("POKER", startX + (btnW + gapX) * 2, gridY + btnH + gapY, Color.Orange, (s, e) => LancerJeu(() => new Poker(GetJ1())));
-
-            // ── Pied de page ───────────────────────────────────────
-            Button btnQuitter = new Button
+            _gameButtons = new List<(Button, bool)>();
+            for (int i = 0; i < games.Length; i++)
             {
-                Text = "QUITTER",
-                Size = new Size(150, 40),
-                Location = new Point((this.ClientSize.Width - 150) / 2, this.ClientSize.Height - 60),
-                FlatStyle = FlatStyle.Flat,
-                ForeColor = Color.Gray,
-                Font = new Font("Segoe UI", 10),
-                Cursor = Cursors.Hand
-            };
-            btnQuitter.FlatAppearance.BorderSize = 0;
-            btnQuitter.Click += (s, e) => Application.Exit();
-            this.Controls.Add(btnQuitter);
-        }
+                int col = i % cols, row = i / cols;
+                int bx  = gridX + col * (btnW + gapX);
+                int by  = gridY + row * (btnH + gapY);
+                var g   = games[i];
 
-        // ── Helpers ────────────────────────────────────────────────
-        private string GetJ1() => string.IsNullOrWhiteSpace(txtJoueur1.Text) ? "Joueur" : txtJoueur1.Text;
-        private string GetJ2() => "Invité"; // Default for local play
+                var btn = MakeGameButton(g.Label, bx, by, btnW, btnH, g.Color);
+                var type = g.Type;
+                var factory = g.Factory;
+                var supportsMulti = g.SupportsMulti;
+                btn.Click += (s, e) => LaunchGameWithModeChoice(type, factory, supportsMulti);
+                btn.Anchor = AnchorStyles.None; 
+                this.Controls.Add(btn);
+                _gameButtons.Add((btn, supportsMulti));
+            }
 
-        private void LancerJeu(Func<Form> createForm)
-        {
-            // Vérifier si Mode En Ligne est activé
-            bool online = false;
-            foreach(Control c in this.Controls) 
-                if (c is CheckBox chk && chk.Text.Contains("RÉSEAU") && chk.Checked) online = true;
-
-            if (online)
+            // ── Leaderboard (Floating Right) ──────────────────────
+            // Only show if there is space
+            if (W > 1200) 
             {
-                // 1. Ouvrir WaitingForm
-                NetworkManager.Instance.MyPseudo = GetJ1();
-                WaitingForm wait = new WaitingForm();
-                if (wait.ShowDialog() == DialogResult.OK)
-                {
-                    // 2. Connecté ! Lancer le jeu
-                    try
-                    {
-                        Form jeu = createForm();
-                        jeu.FormClosed += (s, args) => 
-                        {
-                            NetworkManager.Instance.Disconnect(); // Déco quand on quitte le jeu
-                            this.Show(); 
-                        };
-                        jeu.Show();
-                        this.Hide();
-                    }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show("Erreur lancement jeu : " + ex.Message);
-                    }
-                }
-                // Si Cancel, on ne fait rien (reste sur Accueil)
+                int lbW = 250;
+                // Garder le leaderboard entièrement visible (éviter bouton Quitter + marges)
+                int bottomReserved = 90;
+                int topReserved = 110;
+                int lbH = Math.Max(220, H - topReserved - bottomReserved);
+                int lbX = Math.Max(10, W - lbW - 40);
+                int lbY = topReserved;
+                
+                BuildLeaderboardPanel(lbX, lbY, lbW, lbH);
             }
             else
             {
-                // LOCAL
+                // On smaller screens, maybe hide it or put it below? 
+                // For now, let's just make it smaller/simpler or skip it to keep "Clean"
+                // Or standardized bottom-right
+                 int lbW = Math.Min(240, Math.Max(180, W / 5));
+                 int lbH = Math.Min(320, Math.Max(200, H / 3));
+                 int lbX = Math.Max(10, W - lbW - 20);
+                 int lbY = Math.Max(10, H - lbH - 90);
+                 BuildLeaderboardPanel(lbX, lbY, lbW, lbH);
+            }
+
+            // ── Bouton Quitter ────────────────────────────────────
+            var btnQuit = new Button {
+                Text      = "QUITTER",
+                Location  = new Point((W - 140) / 2, H - 60),
+                Size      = new Size(140, 40),
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = Color.FromArgb(100, 100, 120),
+                Font      = new Font("Segoe UI", 10),
+                Cursor    = Cursors.Hand,
+                Anchor    = AnchorStyles.Bottom
+            };
+            btnQuit.FlatAppearance.BorderSize = 0;
+            btnQuit.Click += (s, e) => Application.Exit();
+            this.Controls.Add(btnQuit);
+        }
+
+        private void BuildLeaderboardPanel(int x, int y, int w, int h)
+        {
+            _pnlLeaderboard = new Panel
+            {
+                Location = new Point(x, y),
+                Size = new Size(w, h),
+                BackColor = C_PANEL,
+                Anchor = AnchorStyles.Right | AnchorStyles.Top | AnchorStyles.Bottom,
+            };
+            _pnlLeaderboard.Paint += (s, e) =>
+                ControlPaint.DrawBorder(e.Graphics, _pnlLeaderboard.ClientRectangle,
+                    Color.FromArgb(60, C_CYAN.R, C_CYAN.G, C_CYAN.B), ButtonBorderStyle.Solid);
+            this.Controls.Add(_pnlLeaderboard);
+
+            var lblLbTitle = new Label
+            {
+                Text = "🏆 CLASSEMENT",
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                ForeColor = C_CYAN,
+                Location = new Point(8, 6),
+                AutoSize = true,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left,
+            };
+            _pnlLeaderboard.Controls.Add(lblLbTitle);
+
+            _listLeaderboard = new ListBox
+            {
+                Location = new Point(6, 28),
+                Size = new Size(w - 12, h - 34),
+                BackColor = Color.FromArgb(12, 12, 22),
+                ForeColor = Color.FromArgb(200, 220, 240),
+                Font = new Font("Consolas", 8.5f),
+                BorderStyle = BorderStyle.None,
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+            };
+            _pnlLeaderboard.Controls.Add(_listLeaderboard);
+        }
+
+
+        private async void LoadLeaderboard()
+        {
+            if (_listLeaderboard == null) return;
+            _listLeaderboard.Items.Clear();
+            _listLeaderboard.Items.Add("Chargement...");
+
+            try
+            {
+                var all = await NetworkManager.Instance.Lobby.GetLeaderboardAsync();
+                _listLeaderboard.Items.Clear();
+
+                var gameNames = new[] { ("Puissance4", "P4"), ("Dames", "Dames"), ("MortPion", "M.Pion"), ("BlackJack", "BJ"), ("Poker", "Poker"), ("Snake", "Snake") };
+                foreach (var (key, name) in gameNames)
+                {
+                    if (!all.TryGetValue(key, out var list) || list == null || list.Count == 0) continue;
+                    _listLeaderboard.Items.Add("── " + name + " ──");
+                    int rank = 1;
+                    foreach (var item in list.Take(5))
+                    {
+                        string pseudo = item.ContainsKey("pseudo") ? (item["pseudo"]?.ToString() ?? "?") : "?";
+                        string valS = item.ContainsKey("value") ? (item["value"]?.ToString() ?? "0") : "0";
+                        string suffix = key == "Snake" ? " pts" : " V";
+                        _listLeaderboard.Items.Add(rank + ") " + pseudo + " - " + valS + suffix);
+                        rank++;
+                    }
+                }
+
+                if (_listLeaderboard.Items.Count == 0)
+                    _listLeaderboard.Items.Add("(Aucun score)");
+            }
+            catch
+            {
+                _listLeaderboard.Items.Clear();
+                _listLeaderboard.Items.Add("(Leaderboard indisponible)");
+            }
+        }
+
+        // ════════════════════════════════════════════════════════
+        //  LANCEMENT D'UN JEU (choix du mode par jeu : local ou réseau)
+        // ════════════════════════════════════════════════════════
+        private void LaunchGameWithModeChoice(string gameType, Func<string, string, bool, Form> factory, bool supportsMulti)
+        {
+            string pseudo = GetPseudo();
+            NetworkManager.Instance.MyPseudo       = pseudo;
+            NetworkManager.Instance.CurrentGameType = gameType;
+
+            bool useNetwork = false;
+            if (supportsMulti)
+            {
+                var dlg = new Form
+                {
+                    Text            = "Mode de jeu",
+                    Size            = new Size(320, 120),
+                    StartPosition   = FormStartPosition.CenterParent,
+                    FormBorderStyle = FormBorderStyle.FixedDialog,
+                    BackColor       = C_PANEL,
+                    ForeColor       = Color.White,
+                };
+                var btnLocal = new Button
+                {
+                    Text = "Jouer en local",
+                    Size = new Size(120, 36),
+                    Location = new Point(24, 36),
+                    FlatStyle = FlatStyle.Flat,
+                    ForeColor = C_CYAN,
+                    BackColor = Color.FromArgb(30, 30, 45),
+                };
+                var btnReseau = new Button
+                {
+                    Text = "Jouer en ligne",
+                    Size = new Size(120, 36),
+                    Location = new Point(160, 36),
+                    FlatStyle = FlatStyle.Flat,
+                    ForeColor = C_GREEN,
+                    BackColor = Color.FromArgb(30, 30, 45),
+                };
+                btnLocal.Click += (s, e) => { dlg.DialogResult = DialogResult.OK; useNetwork = false; dlg.Close(); };
+                btnReseau.Click += (s, e) => { dlg.DialogResult = DialogResult.OK; useNetwork = true; dlg.Close(); };
+                dlg.Controls.Add(btnLocal);
+                dlg.Controls.Add(btnReseau);
+                dlg.Controls.Add(new Label { Text = "Choisir le mode", Location = new Point(24, 10), ForeColor = C_CYAN });
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            }
+
+            if (useNetwork)
+            {
+                var choice = new Form
+                {
+                    Text            = "Multijoueur",
+                    Size            = new Size(420, 170),
+                    StartPosition   = FormStartPosition.CenterParent,
+                    FormBorderStyle = FormBorderStyle.FixedDialog,
+                    BackColor       = C_PANEL,
+                    ForeColor       = Color.White,
+                    AutoScaleMode   = AutoScaleMode.Dpi,
+                };
+                var lbl = new Label { Text = "Choisir une action", Dock = DockStyle.Top, Height = 34, TextAlign = ContentAlignment.MiddleCenter, ForeColor = C_CYAN, Font = new Font("Segoe UI", 10, FontStyle.Bold) };
+                choice.Controls.Add(lbl);
+
+                var layout = new TableLayoutPanel
+                {
+                    Dock = DockStyle.Fill,
+                    ColumnCount = 2,
+                    RowCount = 1,
+                    Padding = new Padding(18, 14, 18, 18),
+                };
+                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+                choice.Controls.Add(layout);
+
+                var btnCreate = new Button { Text = "Créer une partie", Dock = DockStyle.Fill, Height = 44, FlatStyle = FlatStyle.Flat, ForeColor = C_GREEN, BackColor = Color.FromArgb(30, 30, 45) };
+                var btnJoin   = new Button { Text = "Rejoindre une partie", Dock = DockStyle.Fill, Height = 44, FlatStyle = FlatStyle.Flat, ForeColor = C_CYAN, BackColor = Color.FromArgb(30, 30, 45) };
+                layout.Controls.Add(btnCreate, 0, 0);
+                layout.Controls.Add(btnJoin,   1, 0);
+                bool create = false;
+                btnCreate.Click += (s, e) => { create = true;  choice.DialogResult = DialogResult.OK; choice.Close(); };
+                btnJoin.Click   += (s, e) => { create = false; choice.DialogResult = DialogResult.OK; choice.Close(); };
+                if (choice.ShowDialog(this) != DialogResult.OK) return;
+
                 try
                 {
-                    Form jeu = createForm();
-                    jeu.FormClosed += (s, args) => this.Show(); 
+                    if (create)
+                    {
+                        NetworkManager.Instance.HostSalon(GetPseudo(), gameType, 2);
+                        using (var waitForm = new WaitingForPlayerForm(gameType))
+                        {
+                            if (waitForm.ShowDialog(this) != DialogResult.OK) return;
+                        }
+                    }
+                    else
+                    {
+                        using (var listForm = new SalonListForm())
+                        {
+                            if (listForm.ShowDialog(this) != DialogResult.OK) return;
+                        }
+                    }
+                    string j1 = NetworkManager.Instance.IsHost ? NetworkManager.Instance.MyPseudo : NetworkManager.Instance.OpponentPseudo;
+                    string j2 = NetworkManager.Instance.IsHost ? NetworkManager.Instance.OpponentPseudo : NetworkManager.Instance.MyPseudo;
+                    Form jeu = CreateGameFormForCurrentType(j1, j2);
+                    if (jeu == null) { MessageBox.Show("Type de jeu inconnu.", "Erreur"); return; }
+                    jeu.FormClosed += GameFormClosed;
                     jeu.Show();
                     this.Hide();
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show("Erreur lancement jeu : " + ex.Message);
-                    this.Show();
+                    MessageBox.Show("Erreur lancement : " + ex.Message, "Erreur", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+            else
+            {
+                try
+                {
+                    Form jeu = factory(pseudo, "Invité", false);
+                    jeu.FormClosed += (s, e) => this.Show();
+                    jeu.Show();
+                    this.Hide();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Erreur lancement : " + ex.Message);
                 }
             }
         }
 
-        private TextBox NewTextBox(int x, int y)
+        private void GameFormClosed(object sender, FormClosedEventArgs e)
         {
-            return new TextBox
-            {
-                Location = new Point(x, y),
-                Size = new Size(300, 30),
-                Font = new Font("Segoe UI", 12),
-                BackColor = Color.FromArgb(30, 30, 40),
-                ForeColor = Color.White,
-                BorderStyle = BorderStyle.FixedSingle
-            };
+            if (!NetworkManager.Instance.ReturnToLobby)
+                NetworkManager.Instance.Disconnect();
+            else
+                NetworkManager.Instance.ReturnToLobby = false;
+            this.Show();
+            LoadLeaderboard();
         }
 
-        private Label NewLabel(string text, int x, int y, Color color)
+        protected override void OnFormClosed(FormClosedEventArgs e)
         {
-            return new Label
-            {
-                Text = text,
-                Location = new Point(x, y),
-                AutoSize = true,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                ForeColor = color
-            };
+            _leaderboardRefreshTimer?.Stop();
+            _leaderboardRefreshTimer?.Dispose();
+            _leaderboardRefreshTimer = null;
+            base.OnFormClosed(e);
         }
 
-        private void AddGameBtn(string text, int x, int y, Color accentColor, EventHandler onClick)
+        // ── Plus de checkbox global : le mode est choisi par jeu au clic ──
+
+        // ════════════════════════════════════════════════════════
+        //  HELPERS
+        // ════════════════════════════════════════════════════════
+        private string GetPseudo() =>
+            string.IsNullOrWhiteSpace(_txtPseudo?.Text) ? "Joueur" : _txtPseudo.Text.Trim();
+
+        /// <summary>Crée le formulaire de jeu correspondant à CurrentGameType (pour host ou join).</summary>
+        private Form CreateGameFormForCurrentType(string j1, string j2)
         {
-            Button btn = new Button
+            string gt = NetworkManager.Instance.CurrentGameType ?? "any";
+            switch (gt)
             {
-                Text = text,
-                Location = new Point(x, y),
-                Size = new Size(200, 60),
+                case "Puissance4":  return new Puissance_4(j1, j2, true);
+                case "Dames":      return new Dame(j1, j2, true);
+                case "MortPion":   return new mort_Pion(j1, j2, true);
+                case "BlackJack":  return new BlackJack(j1, j2, true);
+                case "Poker":      return new Poker(j1, j2, true);
+                default:           return null;
+            }
+        }
+
+        private Button MakeGameButton(string text, int x, int y, int w, int h, Color accent)
+        {
+            var btn = new Button {
+                Text      = text,
+                Location  = new Point(x, y),
+                Size      = new Size(w, h),
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(20, 20, 30),
-                ForeColor = accentColor,
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                Cursor = Cursors.Hand
+                BackColor = Color.FromArgb(16, 16, 26),
+                ForeColor = accent,
+                Font      = new Font("Segoe UI Black", 11, FontStyle.Bold),
+                Cursor    = Cursors.Hand,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding   = new Padding(14, 0, 0, 0),
             };
-            
-            btn.FlatAppearance.BorderColor = accentColor;
-            btn.FlatAppearance.BorderSize = 1;
-            btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, accentColor.R, accentColor.G, accentColor.B);
-            
-            btn.Click += onClick;
-            this.Controls.Add(btn);
+            btn.FlatAppearance.BorderColor = Color.FromArgb(35, accent.R, accent.G, accent.B);
+            btn.FlatAppearance.BorderSize  = 1;
+            btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(22, accent.R, accent.G, accent.B);
+            btn.MouseEnter += (s, e) => btn.FlatAppearance.BorderColor = accent;
+            btn.MouseLeave += (s, e) => btn.FlatAppearance.BorderColor = Color.FromArgb(35, accent.R, accent.G, accent.B);
+            return btn;
         }
 
-        // Garder les anciens event handlers vides si le designer en a besoin pour ne pas crash
-        // (Bien que le designer ne compile pas le code C#, le runtime via InitializeComponent pourrait chercher ces méthodes)
+        // ── Stubs designer (ne pas toucher) ──────────────────────
         private void btnPuissance4_Click(object sender, EventArgs e) { }
         private void btnMortPion_Click(object sender, EventArgs e) { }
         private void btnSnake_Click(object sender, EventArgs e) { }

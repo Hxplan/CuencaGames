@@ -224,23 +224,19 @@ namespace Jeux_Multiples
                 nbJoueurs = accueil.NombreJoueurs;
             }
 
-            ConfigurerForm();
+            ConfigForm();
             PreCalcCoord();
             BuildUI();
             InitJeu();
             MettreAJourTour();
         }
 
-        private void ConfigurerForm()
+        private void ConfigForm()
         {
             this.Text = "🐴  Les 4 Petits Chevaux";
-            int platW = T * 11 + MG * 2;
-            this.ClientSize = new Size(platW + 280, platW);
-            this.StartPosition = FormStartPosition.CenterScreen;
-            this.FormBorderStyle = FormBorderStyle.FixedSingle;
-            this.MaximizeBox = false;
             this.BackColor = FondForm;
             this.DoubleBuffered = true;
+            FormUtils.ApplyFullScreen(this);
         }
 
         // ══════════════════════════════════════════════════════════════════════
@@ -309,33 +305,52 @@ namespace Jeux_Multiples
         // ══════════════════════════════════════════════════════════════════════
         private void BuildUI()
         {
+            // Calculate content dimensions
             int platW = T * 11 + MG * 2;
+            int sidePanelW = 280;
+            int totalContentW = platW + sidePanelW + 20; // 20px gap
+            int totalContentH = platW; // Height is determined by the board
+
+            // Center positions
+            int startX = (this.ClientSize.Width - totalContentW) / 2;
+            int startY = (this.ClientSize.Height - totalContentH) / 2;
+            
+            // Ensure minimums
+            if (startX < 20) startX = 20;
+            if (startY < 20) startY = 20;
+
+            // Back Button
+            FormUtils.CreateBackButton(this, () => this.Close());
+
+            // Board Panel
             panPlateau = new Panel
             {
-                Location = new Point(0, 0),
-                Size = new Size(platW, this.ClientSize.Height),
+                Location = new Point(startX, startY),
+                Size = new Size(platW, platW), // Square
                 BackColor = Color.Transparent
             };
             panPlateau.Paint += Plateau_Paint;
             panPlateau.MouseClick += Plateau_MouseClick;
             this.Controls.Add(panPlateau);
 
-            int sx = platW + 12;
+            int sx = startX + platW + 20;
+            int sy = startY;
 
             lblTour = new Label
             {
-                Location = new Point(sx, 20),
-                Size = new Size(255, 45),
+                Location = new Point(sx, sy + 20),
+                Size = new Size(sidePanelW, 45),
                 Font = new Font("Georgia", 15, FontStyle.Bold),
                 ForeColor = Color.White,
                 BackColor = Color.Transparent,
-                Text = ""
+                Text = "",
+                TextAlign = ContentAlignment.MiddleCenter
             };
             this.Controls.Add(lblTour);
 
             lblDe = new Label
             {
-                Location = new Point(sx, 72),
+                Location = new Point(sx + (sidePanelW - 70)/2, sy + 72),
                 Size = new Size(70, 70),
                 Font = new Font("Segoe UI Symbol", 40),
                 ForeColor = Color.White,
@@ -347,7 +362,7 @@ namespace Jeux_Multiples
 
             btnLancer = new Button
             {
-                Location = new Point(sx + 78, 82),
+                Location = new Point(sx + (sidePanelW - 170)/2, sy + 150),
                 Size = new Size(170, 48),
                 Text = "🎲  Lancer le dé",
                 Font = new Font("Georgia", 11, FontStyle.Bold),
@@ -362,21 +377,22 @@ namespace Jeux_Multiples
 
             lblMsg = new Label
             {
-                Location = new Point(sx, 145),
-                Size = new Size(258, 130),
+                Location = new Point(sx, sy + 215),
+                Size = new Size(sidePanelW, 130),
                 Font = new Font("Georgia", 10, FontStyle.Italic),
                 ForeColor = Color.FromArgb(205, 205, 205),
                 BackColor = Color.Transparent,
-                TextAlign = ContentAlignment.TopLeft
+                TextAlign = ContentAlignment.TopCenter
             };
             this.Controls.Add(lblMsg);
 
             // Légende joueurs
+            int legendStartY = sy + 360;
             for (int j = 0; j < nbJoueurs; j++)
             {
                 Panel pastille = new Panel
                 {
-                    Location = new Point(sx, 290 + j * 42),
+                    Location = new Point(sx + 20, legendStartY + j * 42),
                     Size = new Size(20, 20),
                     BackColor = CJ[j]
                 };
@@ -384,7 +400,7 @@ namespace Jeux_Multiples
 
                 Label lj = new Label
                 {
-                    Location = new Point(sx + 28, 288 + j * 42),
+                    Location = new Point(sx + 48, legendStartY - 2 + j * 42),
                     Size = new Size(220, 26),
                     Font = new Font("Georgia", 11, FontStyle.Bold),
                     ForeColor = CJ[j],

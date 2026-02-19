@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
@@ -80,8 +80,11 @@ namespace Jeux_Multiples
         // ══════════════════════════════════════════════════════
         //  COORDONNÉES GRILLE
         // ══════════════════════════════════════════════════════
-        public int GridLeft { get { return MARGIN; } }
-        public int GridTop { get { return HEADER; } }
+        // ══════════════════════════════════════════════════════
+        //  COORDONNÉES GRILLE
+        // ══════════════════════════════════════════════════════
+        public int GridLeft { get { return (ClientSize.Width - COLS * CELL) / 2; } }
+        public int GridTop { get { return (ClientSize.Height - ROWS * CELL) / 2 + 20; } }
         public int GridRight { get { return GridLeft + COLS * CELL; } }
         public int GridBottom { get { return GridTop + ROWS * CELL; } }
         #endregion
@@ -91,6 +94,8 @@ namespace Jeux_Multiples
         //  BOUTON
         // ══════════════════════════════════════════════════════
         public Button btnNouveau;
+        public Button btnChanger;
+        public Button btnChanger2;
 
         // ──────────────────────────────────────────────────────
         public string Joueur1 = "Rouge";
@@ -104,12 +109,15 @@ namespace Jeux_Multiples
             if (!string.IsNullOrWhiteSpace(joueur1)) Joueur1 = joueur1;
             if (!string.IsNullOrWhiteSpace(joueur2)) Joueur2 = joueur2;
             this.IsMultiplayer = isMultiplayer;
+            FormUtils.ApplyFullScreen(this);
         }
 
         // Pour compatibilité si nécessaire, ou constructeur par défaut
         public Puissance_4() : this("Rouge", "Jaune", false) { }
 
         // ──────────────────────────────────────────────────────
+        private Label _lblRole; // Field for multiplayer role label
+
         public void Puissance_4_Load(object sender, EventArgs e)
         {
             if (IsMultiplayer)
@@ -121,12 +129,17 @@ namespace Jeux_Multiples
             }
             
             this.Text = $"Puissance 4 - {Joueur1} vs {Joueur2}";
-            this.ClientSize = new Size(GridRight + MARGIN, GridBottom + MARGIN + 55);
             this.DoubleBuffered = true;
             this.BackColor = COL_BG;
-            this.FormBorderStyle = FormBorderStyle.FixedSingle;
-            this.MaximizeBox = false;
-            this.StartPosition = FormStartPosition.CenterScreen;
+            
+            // ── Bouton Retour ─────────────────────────────────
+            var btnRetour = FormUtils.CreateBackButton(this, () => 
+            {
+                 var acc = new Accueil();
+                 acc.Show();
+                 this.Close();
+            });
+            btnRetour.Location = new Point(20, 20);
 
             // ── Bouton Nouvelle Partie ────────────────────────
             btnNouveau = new Button();
@@ -140,9 +153,6 @@ namespace Jeux_Multiples
             btnNouveau.FlatAppearance.BorderColor = COL_TITLE;
             btnNouveau.FlatAppearance.BorderSize = 1;
             btnNouveau.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, COL_TITLE.R, COL_TITLE.G, COL_TITLE.B);
-            btnNouveau.Location = new Point(
-                (this.ClientSize.Width - btnNouveau.Width) / 2,
-                GridBottom + 15);
             btnNouveau.Click += new EventHandler(btnNouveau_Click);
             this.Controls.Add(btnNouveau);
 
@@ -162,7 +172,7 @@ namespace Jeux_Multiples
             NouvellePartie();
 
             // ── Bouton Changer de jeux (Snake) à gauche ───────────────────────
-            Button btnChanger2 = new Button();
+            btnChanger2 = new Button();
             btnChanger2.Text = "SNAKE";
             btnChanger2.Font = new Font("Segoe UI", 9, FontStyle.Bold);
             btnChanger2.ForeColor = COL_WIN; // Vert
@@ -173,14 +183,11 @@ namespace Jeux_Multiples
             btnChanger2.FlatAppearance.BorderColor = COL_WIN;
             btnChanger2.FlatAppearance.BorderSize = 1;
             btnChanger2.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, COL_WIN.R, COL_WIN.G, COL_WIN.B);
-            btnChanger2.Location = new Point(
-                (this.ClientSize.Width - btnChanger2.Width) / 2 - 170,
-                GridBottom + 15);
             btnChanger2.Click += new EventHandler(btnChanger2_Click);
             this.Controls.Add(btnChanger2);
 
             // ── Bouton Changer de jeux (Morpion) à droite ───────────────────────
-            Button btnChanger = new Button();
+            btnChanger = new Button();
             btnChanger.Text = "MORPION";
             btnChanger.Font = new Font("Segoe UI", 9, FontStyle.Bold);
             btnChanger.ForeColor = COL_ROUGE; // Rouge
@@ -191,12 +198,75 @@ namespace Jeux_Multiples
             btnChanger.FlatAppearance.BorderColor = COL_ROUGE;
             btnChanger.FlatAppearance.BorderSize = 1;
             btnChanger.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, COL_ROUGE.R, COL_ROUGE.G, COL_ROUGE.B);
-            btnChanger.Location = new Point(
-                (this.ClientSize.Width - btnChanger.Width) / 2 + 170,
-                GridBottom + 15);
             btnChanger.Click += new EventHandler(btnChanger_Click);
             this.Controls.Add(btnChanger);
 
+            // ── En local: enlever les boutons de changement de jeu ────────────
+            btnChanger.Visible  = false;
+            btnChanger2.Visible = false;
+
+            // ── Masquer les boutons de navigation en mode multijoueur ──────────
+            if (IsMultiplayer)
+            {
+                btnNouveau.Visible  = false;
+                btnChanger.Visible  = false;
+                btnChanger2.Visible = false;
+
+                // Label indiquant quel rôle on joue
+                _lblRole = new Label
+                {
+                    Text      = NetworkManager.Instance.IsHost
+                                ? $"Vous êtes ● ROUGE ({Joueur1})"
+                                : $"Vous êtes ● JAUNE ({Joueur2})",
+                    ForeColor = NetworkManager.Instance.IsHost ? COL_ROUGE : COL_JAUNE,
+                    Font      = new Font("Segoe UI", 9, FontStyle.Bold),
+                    AutoSize  = false,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Size      = new Size(500, 20), // Width updated in RecalcLayout
+                    Location  = new Point(0, 0),    // Updated in RecalcLayout
+                };
+                this.Controls.Add(_lblRole);
+            }
+
+            // Petit label "À vous de jouer" en bas à gauche (pas au milieu)
+            _lblAVousDeJouer = new Label
+            {
+                Text      = "",
+                ForeColor = COL_TITLE,
+                Font      = new Font("Segoe UI", 9),
+                AutoSize  = true,
+                Location  = new Point(MARGIN, GridBottom + 14),
+                BackColor = Color.Transparent,
+            };
+            this.Controls.Add(_lblAVousDeJouer);
+            UpdateTourLabel();
+            
+            this.Resize += (s, ev) => RecalcLayout();
+            RecalcLayout();
+        }
+        
+        private void RecalcLayout()
+        {
+             int btnY = GridBottom + 30;
+             int centerX = ClientSize.Width / 2;
+             
+             if (btnNouveau != null) btnNouveau.Location = new Point(centerX - btnNouveau.Width / 2, btnY);
+             if (btnChanger != null) btnChanger.Location = new Point(centerX - btnChanger.Width / 2 + 170, btnY); // Right
+             if (btnChanger2 != null) btnChanger2.Location = new Point(centerX - btnChanger2.Width / 2 - 170, btnY); // Left
+             
+             if (_lblAVousDeJouer != null)
+             {
+                 // Move lower to separate from role label
+                 _lblAVousDeJouer.Location = new Point(GridLeft, GridBottom + 55);
+             }
+
+             if (_lblRole != null)
+             {
+                 _lblRole.Size = new Size(ClientSize.Width, 20);
+                 _lblRole.Location = new Point(0, GridBottom + 20);
+                 _lblRole.BringToFront(); // Ensure visible
+             }
+             Invalidate();
         }
         #endregion
 
@@ -211,20 +281,161 @@ namespace Jeux_Multiples
 
         private void OnDisconnected()
         {
-            this.Invoke(new Action(() => 
+            if (this.IsDisposed || !this.IsHandleCreated) return;
+            this.BeginInvoke(new Action(() =>
             {
-                MessageBox.Show("Adversaire déconnecté.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                if (this.IsDisposed) return;
+                dropTimer.Stop();
+                glowTimer.Stop();
+                // En ligne: retour direct à l'accueil, sans notification.
+                try { NetworkManager.Instance.Disconnect(); } catch { }
+                try
+                {
+                    var acc = new Accueil();
+                    acc.Show();
+                }
+                catch { }
                 this.Close();
             }));
         }
 
         private void OnPacketReceived(Packet p)
         {
+            if (this.IsDisposed || !this.IsHandleCreated) return;
             if (p.Type == "MOVE")
             {
-                int col = int.Parse(p.Content);
-                this.Invoke(new Action(() => JouerCoup(col, false))); // False = Remote move
+                if (!int.TryParse(p.Content, out int col)) return;
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed) return;
+                    JouerCoup(col, false);
+                }));
             }
+            else if (p.Type == "NEW_GAME")
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed) return;
+                    NouvellePartie();
+                }));
+            }
+            else if (p.Type == "REMATCH_REQUEST")
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed) return;
+                    var r = MessageBox.Show(p.Sender + " veut rejouer. Accepter ?", "Relancer la partie",
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                    if (r == DialogResult.Yes)
+                        NetworkManager.Instance.SendPacket(new Packet("REMATCH_ACCEPT", NetworkManager.Instance.MyPseudo, ""));
+                    else
+                    {
+                        NetworkManager.Instance.SendPacket(new Packet("REMATCH_REFUSE", NetworkManager.Instance.MyPseudo, ""));
+                        NetworkManager.Instance.ReturnToLobby = true;
+                        this.Close();
+                    }
+                }));
+            }
+            else if (p.Type == "REMATCH_ACCEPT")
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed) return;
+                    NouvellePartie();
+                }));
+            }
+            else if (p.Type == "REMATCH_REFUSE")
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed) return;
+                    NetworkManager.Instance.ReturnToLobby = true;
+                    this.Close();
+                }));
+            }
+        }
+
+        private void ShowRematchDialog()
+        {
+            // Seul l'hôte propose de relancer (évite que les 2 côtés demandent).
+            if (IsMultiplayer && !NetworkManager.Instance.IsHost)
+            {
+                var wait = new Form
+                {
+                    Text = "Partie terminée",
+                    Size = new Size(360, 150),
+                    StartPosition = FormStartPosition.CenterParent,
+                    FormBorderStyle = FormBorderStyle.FixedDialog,
+                    BackColor = Color.FromArgb(20, 20, 32),
+                    ForeColor = Color.White,
+                };
+                wait.Controls.Add(new Label
+                {
+                    Text = "En attente de la décision de l'hôte…",
+                    Location = new Point(18, 18),
+                    ForeColor = COL_TITLE,
+                    AutoSize = true
+                });
+                var btnSalon = new Button
+                {
+                    Text = "Retour au salon",
+                    Size = new Size(140, 36),
+                    Location = new Point((360 - 140) / 2, 74),
+                    FlatStyle = FlatStyle.Flat,
+                    ForeColor = Color.FromArgb(255, 34, 68),
+                };
+                btnSalon.Click += (s, e) =>
+                {
+                    NetworkManager.Instance.ReturnToLobby = true;
+                    wait.Close();
+                    this.Close();
+                };
+                wait.Controls.Add(btnSalon);
+                wait.ShowDialog(this);
+                return;
+            }
+
+            var dlg = new Form
+            {
+                Text = "Partie terminée",
+                Size = new Size(320, 140),
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                BackColor = Color.FromArgb(20, 20, 32),
+                ForeColor = Color.White,
+            };
+            var btnRelancer = new Button
+            {
+                Text = "Relancer la partie",
+                Size = new Size(140, 36),
+                Location = new Point(24, 64),
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = Color.FromArgb(0, 255, 136),
+            };
+            var btnSalon = new Button
+            {
+                Text = "Retour au salon",
+                Size = new Size(140, 36),
+                Location = new Point(168, 64),
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = Color.FromArgb(255, 34, 68),
+            };
+            btnRelancer.Click += (s, e) =>
+            {
+                NetworkManager.Instance.SendPacket(new Packet("REMATCH_REQUEST", NetworkManager.Instance.MyPseudo, ""));
+                dlg.Close();
+            };
+            btnSalon.Click += (s, e) =>
+            {
+                NetworkManager.Instance.SendPacket(new Packet("REMATCH_REFUSE", NetworkManager.Instance.MyPseudo, ""));
+                NetworkManager.Instance.ReturnToLobby = true;
+                dlg.Close();
+                this.Close();
+            };
+            dlg.Controls.Add(btnRelancer);
+            dlg.Controls.Add(btnSalon);
+            dlg.Controls.Add(new Label { Text = "Que voulez-vous faire ?", Location = new Point(24, 20), ForeColor = Color.FromArgb(0, 238, 255), AutoSize = true });
+            dlg.ShowDialog(this);
         }
 
         public void glowTimer_Tick(object sender, EventArgs e)
@@ -322,11 +533,13 @@ namespace Jeux_Multiples
                     glowTimer.Start();
                     Invalidate();
                     string nom = dropJoueur == 1 ? Joueur1 : Joueur2;
+                    try { _ = NetworkManager.Instance.Lobby.RecordWinAsync(nom, "Puissance4"); } catch { }
                     MessageBox.Show(
                         "Le joueur " + nom + " gagne la partie !",
                         "Puissance 4 - Victoire !",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.None);
+                    if (IsMultiplayer) ShowRematchDialog();
                     return;
                 }
 
@@ -336,10 +549,12 @@ namespace Jeux_Multiples
                     Invalidate();
                     MessageBox.Show("Match nul !", "Puissance 4",
                         MessageBoxButtons.OK, MessageBoxIcon.None);
+                    if (IsMultiplayer) ShowRematchDialog();
                     return;
                 }
 
                 rouge_Tour = !rouge_Tour;
+                UpdateTourLabel();
             }
             Invalidate();
         }
@@ -358,6 +573,7 @@ namespace Jeux_Multiples
             winCells.Clear();
             dropTimer.Stop();
             glowTimer.Stop();
+            UpdateTourLabel();
             Invalidate();
         }
 
@@ -445,18 +661,23 @@ namespace Jeux_Multiples
         // ── En-tête ──────────────────────────────────────────
         public void DessinerEntete(Graphics g)
         {
+            float centerY = 35f; // Title center Y
             string titre = "PUISSANCE 4";
             SizeF szT = g.MeasureString(titre, fontTitle);
             g.DrawString(titre, fontTitle, new SolidBrush(COL_TITLE),
-                (this.ClientSize.Width - szT.Width) / 2f, 8f);
+                (this.ClientSize.Width - szT.Width) / 2f, centerY - szT.Height / 2f);
 
+            // Scores below the header level to avoid Back button (at 20,20)
+            float scoreY = 80f; 
+            
+            // Move text to x=140 to clearly avoid the Back button (width=100 + margin=20)
             string sr = $"{Joueur1} : {scoreRouge}";
-            g.DrawString(sr, fontScore, new SolidBrush(COL_ROUGE), (float)MARGIN, 12f);
+            g.DrawString(sr, fontScore, new SolidBrush(COL_ROUGE), 140f, scoreY);
 
             string sj = $"{Joueur2} : {scoreJaune}";
             SizeF szJ = g.MeasureString(sj, fontScore);
             g.DrawString(sj, fontScore, new SolidBrush(COL_JAUNE),
-                GridRight - szJ.Width, 12f);
+                GridRight - szJ.Width, scoreY);
         }
 
         // ── Flèche indicatrice de colonne ────────────────────
@@ -600,18 +821,22 @@ namespace Jeux_Multiples
             }
         }
 
-        // ── Statut (tour en cours) ───────────────────────────
+        // ── Statut (tour en cours) : petit "À vous de jouer" en bas à gauche, pas au centre ──
+        private Label _lblAVousDeJouer;
+
         public void DessinerStatut(Graphics g)
         {
             if (gameOver || dropping) return;
+            // Texte déplacé dans un label en petit, pas au milieu (voir UpdateTourLabel)
+        }
 
-            string msg = rouge_Tour ? $"Tour de {Joueur1}" : $"Tour de {Joueur2}";
-            Color couleur = rouge_Tour ? COL_ROUGE : COL_JAUNE;
-
-            SizeF sz = g.MeasureString(msg, fontStatus);
-            g.DrawString(msg, fontStatus, new SolidBrush(couleur),
-                (this.ClientSize.Width - sz.Width) / 2f,
-                GridBottom + 13f);
+        private void UpdateTourLabel()
+        {
+            if (_lblAVousDeJouer == null) return;
+            if (gameOver || dropping) { _lblAVousDeJouer.Text = ""; return; }
+            bool myTurn = !IsMultiplayer || (NetworkManager.Instance.IsHost ? rouge_Tour : !rouge_Tour);
+            _lblAVousDeJouer.Text = myTurn ? "À vous de jouer" : "Attente adversaire...";
+            _lblAVousDeJouer.ForeColor = rouge_Tour ? COL_ROUGE : COL_JAUNE;
         }
 
         // ══════════════════════════════════════════════════════
